@@ -35,7 +35,7 @@ class MainActivity : AppCompatActivity() {
     ui.webViewClient = object : WebViewClient() {
       override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
         val h = r.url.host ?: return true
-        if (h == roomHost || h == "accounts.spotify.com") return false
+        if (h == roomHost) return false
         startActivity(Intent(Intent.ACTION_VIEW, r.url)); return true   // keep the bridge off other sites
       }
     }

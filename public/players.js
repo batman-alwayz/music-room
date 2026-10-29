@@ -1,35 +1,6 @@
-// every player: position() -> ms, seek(ms), play(x, ms), pause(), end(durMs) -> Promise, cancel()
+// every player: position() -> ms (or null), seek(ms), play(videoId, ms), pause(), end(durMs) -> Promise, cancel()
 
-// connect: the official Spotify app is the player (Premium only)
-export const connect = (api, device) => {
-  let timer = null;
-  const q = `device_id=${device}`;
-  return {
-    position: async () => {
-      const r = await api.get('/me/player');
-      if (!r || r.progress_ms == null || !r.is_playing) return null;
-      const age = r.timestamp ? Math.min(5000, Math.max(0, Date.now() - r.timestamp)) : 0;
-      return r.progress_ms + age;
-    },
-    seek: ms => api.put(`/me/player/seek?position_ms=${Math.round(ms)}&${q}`),
-    play: (uri, ms) => api.put(`/me/player/play?${q}`, { uris: [uri], position_ms: Math.round(ms) }),
-    pause: () => api.put(`/me/player/pause?${q}`),
-    // only resolves AFTER we saw it playing near the end and then stop (old code fired instantly)
-    end: dur => new Promise(res => {
-      let last = 0, seen = false;
-      clearInterval(timer);
-      timer = setInterval(async () => {
-        const s = await api.get('/me/player');
-        if (!s) return;
-        if (s.is_playing) { seen = true; last = s.progress_ms; return; }
-        if (seen && last >= dur - 4000) { clearInterval(timer); res(); }
-      }, 1000);
-    }),
-    cancel: () => clearInterval(timer)
-  };
-};
-
-// ytm: native shell only, talks to the injected bridge
+// ytm: native shell (Android / iOS) plays YouTube Music in a hidden WebView
 export const ytm = send => ({
   position: async () => Number(await send('position')) || 0,
   seek: ms => send('seek', ms),
@@ -39,7 +10,37 @@ export const ytm = send => ({
   cancel: () => { window.onYtmEnd = null; }
 });
 
-// browser fallback: countdown only, the user taps play in their own app
+// web: YouTube's official iframe player, for a laptop/desktop browser tab (also handy for testing)
+let ytApi;
+const loadYT = () => ytApi ||= new Promise(res => {
+  if (window.YT?.Player) return res();
+  window.onYouTubeIframeAPIReady = res;
+  const s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  document.head.append(s);
+});
+export const web = elId => {
+  let p, endRes = null;
+  const ready = loadYT().then(() => new Promise(res => {
+    p = new YT.Player(elId, {
+      height: '120', width: '200', playerVars: { playsinline: 1, controls: 0 },
+      events: {
+        onReady: res,
+        onStateChange: e => { if (e.data === 0 && endRes) { endRes(); endRes = null; } }
+      }
+    });
+  }));
+  return {
+    position: async () => { await ready; return p.getPlayerState() === 1 ? p.getCurrentTime() * 1000 : null; },
+    seek: async ms => { await ready; p.seekTo(ms / 1000, true); },
+    play: async (id, ms) => { await ready; p.loadVideoById({ videoId: id, startSeconds: ms / 1000 }); },
+    pause: async () => { await ready; p.pauseVideo(); },
+    end: () => new Promise(r => { endRes = r; }),
+    cancel: () => { endRes = null; }
+  };
+};
+
+// manual (add ?manual to the URL): countdown only, you press play in your own app
 export const manual = (getState, now) => {
   let timer = null;
   return {
@@ -52,12 +53,7 @@ export const manual = (getState, now) => {
   };
 };
 
-// what each kind of member gets
-export function routeFor(member) {
-  if (member.provider === 'spotify') {
-    return member.product === 'premium'
-      ? { player: 'connect', ads: false }
-      : { player: 'manual', ads: true, skip: false };      // Spotify free can't be remote-controlled
-  }
-  return { player: 'ytm-web', ads: member.product !== 'premium', skip: true };
+// everyone, free or Premium, plays through YouTube now
+export function routeFor() {
+  return { player: window.NativeBridge || window.webkit?.messageHandlers?.native ? 'ytm' : 'web', ads: true, skip: true };
 }

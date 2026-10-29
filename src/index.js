@@ -1,6 +1,6 @@
-import { login, callback, logout, whoami } from './auth.js';
+import { join, logout, whoami } from './auth.js';
 import { Room } from './room.js';
-import { match } from './match.js';
+import { ytSearch, ytLookup, linkId } from './search.js';
 export { Room };
 
 const json = (d, s = 200) => new Response(JSON.stringify(d), {
@@ -12,34 +12,27 @@ export default {
     const u = new URL(req.url);
     const p = u.pathname;
 
-    if (p === '/auth/login') return login(req, env);
-    if (p === '/auth/callback') return callback(req, env);
+    if (p === '/auth/join') return join(req, env);
     if (p === '/auth/logout') return logout(req, env);
 
     if (!p.startsWith('/api/')) return env.ASSETS.fetch(req);   // static files need no DB hit
 
-    const me = await whoami(req, env, p === '/api/token' && u.searchParams.has('force'));
+    const me = await whoami(req, env);
     if (!me) return json({ error: 'auth' }, 401);
+    if (p === '/api/me') return json(me);
 
-    if (p === '/api/me') { const { access, exp, ...pub } = me; return json(pub); }
-    if (p === '/api/token') return json({ token: me.access, exp: me.exp });
-
-    if (p === '/api/match' && req.method === 'POST') {
-      const { track } = await req.json();
-      if (!track?.title) return json({ error: 'bad' }, 400);
-      const cached = track.sp_id && await env.DB.prepare(
-        'SELECT yt_id, conf, how FROM tracks WHERE id=? AND yt_id IS NOT NULL').bind(track.sp_id).first();
-      if (cached) return json(cached);
-      const hit = await match(track, env);
-      if (!hit) return json({ error: 'nomatch' }, 404);
-      await env.DB.prepare(
-        `INSERT INTO tracks (id,isrc,title,artist,album,dur,sp_id,yt_id,cover,conf,how)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(id) DO UPDATE SET yt_id=excluded.yt_id, conf=excluded.conf, how=excluded.how`
-      ).bind(track.sp_id || track.tid, track.isrc || null, track.title, track.artist || null,
-             track.album || null, track.dur || 0, track.sp_id || null, hit.id,
-             track.cover || null, hit.conf, hit.how).run();
-      return json({ yt_id: hit.id, conf: hit.conf, how: hit.how });
+    if (p === '/api/search') {
+      const q = (u.searchParams.get('q') || '').trim().slice(0, 120);
+      if (!q) return json({ items: [] });
+      if (!env.YT_API_KEY) return json({ error: 'nokey' }, 503);
+      const id = linkId(q);
+      if (id) return json({ items: await ytLookup(id, env) });
+      const key = 'srch:' + q.toLowerCase();
+      const hit = await env.KV.get(key, 'json');
+      if (hit) return json({ items: hit });
+      const items = await ytSearch(q, env);
+      if (items.length) await env.KV.put(key, JSON.stringify(items), { expirationTtl: 21600 });
+      return json({ items });
     }
 
     if (p === '/api/lyrics') {

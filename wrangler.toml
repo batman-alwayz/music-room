@@ -9,11 +9,11 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "room"
-database_id = "REPLACE_ME"
+database_id = "dc796a6b-0d50-444e-8fe0-4fe177a13a23"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_ME"
+id = "1ae126ecef634326bae1eefa0bf38864"
 
 [[durable_objects.bindings]]
 name = "ROOM"

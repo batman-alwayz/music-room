@@ -14,15 +14,23 @@
   .t{font-size:18px;font-weight:600}.s{color:#8b9099;font-size:12px;margin-top:2px}
   #armbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0}
   .chips{display:flex;gap:6px;flex-wrap:wrap}.chip{background:#1a1d22;border-radius:99px;padding:3px 9px;font-size:12px}
-  #q{width:100%;box-sizing:border-box;background:#14161a;color:inherit;border:1px solid #1a1d22;border-radius:9px;padding:10px;font:inherit;margin:8px 0}
+  input{width:100%;box-sizing:border-box;background:#14161a;color:inherit;border:1px solid #1a1d22;border-radius:9px;padding:10px;font:inherit;margin:6px 0}
+  #login{padding-top:22vh;max-width:320px;margin:0 auto}
 </style>
-<div id="login" hidden style="padding-top:30vh;text-align:center"><a class="btn" href="/auth/login">Log in with Spotify</a></div>
+<div id="login" hidden>
+  <div class="t" style="margin-bottom:10px">Room</div>
+  <input id="name" placeholder="Your name" autocomplete="nickname" maxlength="24">
+  <input id="code" placeholder="Invite code" type="password" autocomplete="off">
+  <button id="join" class="btn" style="width:100%;margin-top:6px">Join</button>
+  <div id="err" class="s" style="color:#ff8a8a"></div>
+</div>
 <div id="app" hidden>
   <div id="np"></div>
   <div id="armbar"></div>
-  <input id="q" placeholder="Search songs, press Enter" enterkeyhint="search">
+  <input id="q" placeholder="Search a song, or paste a YouTube link" enterkeyhint="search">
   <div id="results"></div>
   <div id="queue"></div>
+  <div id="webwrap" hidden style="position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 10px)"><div id="webplayer"></div></div>
 </div>
 <script type="module" src="/app.js"></script>
 </html>

@@ -88,7 +88,7 @@ export class Room {
         if (s.queue.filter(q => q.by === who).length >= 3) break;                     // quota
         const track = {
           tid: b.tid, title: b.title, artist: b.artist, album: b.album, dur: Number(b.dur),
-          uri: b.uri, sp_id: b.sp_id, yt_id: b.yt_id, cover: b.cover, isrc: b.isrc,
+          yt_id: b.tid, cover: b.cover,
           by: who, at: Date.now()
         };
         const burst = s.queue.slice(-2).filter(q => q.by === who).length;

@@ -1,8 +1,8 @@
 import { setOffset, serverNow, startLoop } from './sync.js';
-import { connect, ytm, manual, routeFor } from './players.js';
+import { ytm, web, manual } from './players.js';
 
 let S = { queue: [], playing: null, present: {}, armed: {}, part: {}, votes: [], startAt: 0, endAt: 0, seq: 0 };
-let me, player, loop, ws, device = null, ready = false;
+let me, player, loop, ws, ready = false;
 let wantArmed = true, lastSeq = -1, beginTimer, playToken = 0, lastDrift = 0, backoff = 1000, lastArm = 0, status = '';
 
 const $ = s => document.querySelector(s);
@@ -17,28 +17,6 @@ const h = (tag, props = {}, ...kids) => {
   return e;
 };
 
-// ---------- Spotify Web API (token comes from our Worker, which refreshes it) ----------
-let tok = null, tokExp = 0;
-async function getToken(force) {
-  if (!force && tok && Date.now() < tokExp - 60000) return tok;
-  const r = await fetch('/api/token' + (force ? '?force=1' : ''));
-  if (!r.ok) return null;
-  const j = await r.json(); tok = j.token; tokExp = j.exp; return tok;
-}
-async function sp(method, path, body, retry = true) {
-  const t = await getToken();
-  if (!t) return null;
-  const r = await fetch('https://api.spotify.com/v1' + path, {
-    method,
-    headers: { authorization: 'Bearer ' + t, ...(body ? { 'content-type': 'application/json' } : {}) },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  if (r.status === 401 && retry) { await getToken(true); return sp(method, path, body, false); }
-  if (!r.ok || r.status === 204) return null;
-  return r.json().catch(() => null);
-}
-const api = { get: p => sp('GET', p), put: (p, b) => sp('PUT', p, b) };
-
 // ---------- native shell bridge (Android WebView / iOS WKWebView) ----------
 const hasShell = () => !!(window.NativeBridge || window.webkit?.messageHandlers?.native);
 function sendToShell(name, arg) {
@@ -51,44 +29,18 @@ function sendToShell(name, arg) {
   return name === 'position' ? (window.__pos ?? 0) : undefined;
 }
 
-// ---------- routing ----------
-function route(m) {
-  if (m.provider === 'spotify') return m.product === 'premium' ? 'connect' : 'manual';
-  return hasShell() ? 'ytm' : 'manual';
-}
-
-async function getDevice() {
-  const r = await api.get('/me/player/devices');
-  const list = r?.devices || [];
-  return (list.find(d => d.is_active) || list.find(d => !d.is_restricted))?.id || null;
+// ---------- routing: everyone plays through YouTube ----------
+function route() {
+  if (new URLSearchParams(location.search).has('manual')) return 'manual';
+  return hasShell() ? 'ytm' : 'web';
 }
 
 async function pick() {
-  const r = route(me);
-  if (r === 'connect') {
-    device = await getDevice();                              // cached from /me/player/devices
-    if (device) { player = connect(api, device); ready = true; setStatus(''); }
-    else { ready = false; setStatus('Spotify app not running — open it on this device'); }
-  } else if (r === 'ytm') {
-    player = ytm(sendToShell); ready = true;
-  } else {
-    player = manual(() => S, serverNow); ready = true;
-    setStatus(routeFor(me).ads ? 'Free tier: press play in your music app when the countdown ends' : 'Press play in your music app when the countdown ends');
-  }
-}
-
-// Spotify app closed/opened while we run: go "away" so the room doesn't wait for us
-function watchDevice() {
-  if (route(me) !== 'connect') return;
-  setInterval(async () => {
-    const d = await getDevice();
-    if (!d && ready) { ready = false; send({ t: 'away', v: true }); setStatus('Spotify app not running — open it on this device'); }
-    else if (d && (!ready || d !== device)) {
-      device = d; player = connect(api, d);
-      if (!ready) { ready = true; send({ t: 'away', v: false }); setStatus(''); }
-    }
-    render();
-  }, 5000);
+  const r = route();
+  if (r === 'ytm') player = ytm(sendToShell);
+  else if (r === 'web') { $('#webwrap').hidden = false; player = web('webplayer'); setStatus('Keep this tab open — the song plays here'); }
+  else { player = manual(() => S, serverNow); setStatus('Press play in your own music app when the countdown ends'); }
+  ready = true;
 }
 
 // ---------- room connection ----------
@@ -96,11 +48,7 @@ function send(m) { if (ws?.readyState === 1) ws.send(JSON.stringify(m)); }
 
 function connectWS() {
   ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/api/ws');
-  ws.onopen = () => {
-    backoff = 1000;
-    send({ t: 'join' });
-    if (!ready) send({ t: 'away', v: true });
-  };
+  ws.onopen = () => { backoff = 1000; send({ t: 'join' }); };
   ws.onmessage = e => onFrame(JSON.parse(e.data));
   ws.onclose = () => setTimeout(connectWS, (backoff = Math.min(backoff * 2, 15000)));
 }
@@ -121,33 +69,18 @@ function autoArm() {
   }
 }
 
-async function ytId(t) {
-  if (t.yt_id) return t.yt_id;
-  try {
-    const r = await fetch('/api/match', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ track: t })
-    });
-    return r.ok ? (await r.json()).yt_id : null;
-  } catch { return null; }
-}
-
 async function begin() {
   // joined mid-song? sit out until the next track (gather gate: nobody seeks into a song)
   if (!ready || !S.part?.[me.id]) return;
   const t = S.playing, seq = S.seq;
   clearTimers();
   const token = ++playToken;
-  const isYtm = route(me) === 'ytm';
-  const idP = isYtm ? ytId(t) : Promise.resolve(t.uri || 'spotify:track:' + t.sp_id);
   // start slightly before the countdown ends so everyone lands on 0:00 together
   const wait = Math.max(0, S.startAt - serverNow() - 400);
   beginTimer = setTimeout(async () => {
     if (token !== playToken) return;
-    const id = await idP;
-    if (token !== playToken) return;
     const late = Math.max(0, serverNow() - S.startAt);
-    if (id) await player.play(id, late);
+    await player.play(t.yt_id || t.tid, late);
     if (token !== playToken) return;
     loop = startLoop(player, () => S, paintDrift);
     player.end(t.dur * 1000).then(() => { if (token === playToken) send({ t: 'ended', seq }); });
@@ -216,7 +149,7 @@ setInterval(() => {                                          // countdown / manu
   if (!e || !S.playing) return;
   const left = S.startAt - serverNow();
   if (left > 0) e.textContent = `starting in ${Math.ceil(left / 1000)}…`;
-  else if (route(me) === 'manual') e.textContent = 'play it now in your music app';
+  else if (route() === 'manual') e.textContent = 'play it now in your music app';
   else paintDrift(lastDrift);
 }, 250);
 
@@ -225,37 +158,52 @@ setInterval(() => {                                          // keep-alive + pro
     send({ t: 'progress', ms: Math.max(0, serverNow() - S.startAt + lastDrift) });
 }, 5000);
 
-// ---------- search & add ----------
+// ---------- search & add (type a name, or paste a YouTube / YouTube Music link) ----------
 async function search(q) {
-  const r = await api.get('/search?type=track&limit=8&q=' + encodeURIComponent(q));
-  const box = $('#results'); box.replaceChildren();
-  for (const t of r?.tracks?.items || []) {
+  const box = $('#results'); box.replaceChildren(h('div', { class: 's' }, 'Searching…'));
+  const r = await fetch('/api/search?q=' + encodeURIComponent(q)).catch(() => null);
+  box.replaceChildren();
+  if (!r || !r.ok) {
+    box.append(h('div', { class: 's' }, r?.status === 503 ? 'Search is not set up on the server yet (YT_API_KEY)' : 'Search failed, try again'));
+    return;
+  }
+  const { items } = await r.json();
+  if (!items.length) box.append(h('div', { class: 's' }, 'Nothing found'));
+  for (const t of items) {
     box.append(h('div', { class: 'row' },
-      h('div', { style: 'flex:1;min-width:0' }, h('div', {}, t.name), h('div', { class: 's' }, t.artists.map(a => a.name).join(', '))),
+      t.cover && h('img', { src: t.cover, width: '48', height: '36', style: 'border-radius:6px;object-fit:cover' }),
+      h('div', { style: 'flex:1;min-width:0' }, h('div', {}, t.title), h('div', { class: 's' }, t.artist)),
       h('button', {
         class: 'btn', onclick: () => {
-          send({
-            t: 'add', tid: t.id, title: t.name, artist: t.artists[0]?.name, album: t.album?.name,
-            dur: t.duration_ms / 1000, uri: t.uri, sp_id: t.id,
-            cover: t.album?.images?.[2]?.url, isrc: t.external_ids?.isrc
-          });
+          send({ t: 'add', tid: t.tid, title: t.title, artist: t.artist, dur: t.dur, cover: t.cover });
           box.replaceChildren(); $('#q').value = '';
         }
       }, 'Add')));
   }
 }
 
-// ---------- boot ----------
-window.voteSkip = () => send({ t: 'skip' });                // called by the Android lock-screen "next"
+// ---------- login & boot ----------
+window.voteSkip = () => send({ t: 'skip' });                // called by the native lock-screen "next"
+
+async function doJoin() {
+  const err = $('#err'); err.textContent = '';
+  const r = await fetch('/auth/join', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: $('#name').value, code: $('#code').value })
+  }).catch(() => null);
+  if (r?.ok) return location.reload();
+  err.textContent = r?.status === 429 ? 'Too many tries, wait a bit' : r?.status === 403 ? 'Wrong code or empty name' : 'Could not reach the server';
+}
 
 async function init() {
-  $('#q')?.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.value.trim()) search(e.target.value.trim()); });
+  $('#join').addEventListener('click', doJoin);
+  $('#code').addEventListener('keydown', e => { if (e.key === 'Enter') doJoin(); });
+  $('#q').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.value.trim()) search(e.target.value.trim()); });
   const r = await fetch('/api/me');
   if (r.status === 401) { $('#login').hidden = false; return; }
   me = await r.json();
   $('#app').hidden = false;
   await pick();
-  watchDevice();
   connectWS();
   navigator.serviceWorker?.register('/sw.js');
 }
