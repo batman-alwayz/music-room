@@ -1,5 +1,7 @@
 import { join, logout, whoami } from './auth.js';
 import { Room } from './room.js';
+import { rooms, isMember } from './rooms.js';
+import { playlists } from './playlists.js';
 import { ytSearch, ytLookup, linkId } from './search.js';
 export { Room };
 
@@ -24,10 +26,9 @@ export default {
     if (p === '/api/search') {
       const q = (u.searchParams.get('q') || '').trim().slice(0, 120);
       if (!q) return json({ items: [] });
-      if (!env.YT_API_KEY) return json({ error: 'nokey' }, 503);
       const id = linkId(q);
       if (id) return json({ items: await ytLookup(id, env) });
-      const key = 'srch:' + q.toLowerCase();
+      const key = 'srch2:' + q.toLowerCase();
       const hit = await env.KV.get(key, 'json');
       if (hit) return json({ items: hit });
       const items = await ytSearch(q, env);
@@ -50,19 +51,25 @@ export default {
       return row ? json(row) : json({ error: 'none' }, 404);
     }
 
-    // everything else goes to the room's Durable Object
-    const stub = env.ROOM.get(env.ROOM.idFromName(me.room));
+    if (p.startsWith('/api/rooms')) return rooms(req, env, me, p);
+    if (p.startsWith('/api/playlists')) return playlists(req, env, me, p);
+
+    // everything else talks to one room's Durable Object (you must have joined that room)
+    const roomId = (u.searchParams.get('room') || '').toUpperCase();
+    if (!roomId || !(await isMember(env, roomId, me.id))) return json({ error: 'room' }, 403);
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomId));
 
     if (p === '/api/ws') {
       const h = new Headers(req.headers);
       h.set('x-member', me.id);
+      h.set('x-room', roomId);
       return stub.fetch(new Request('https://do/ws', { headers: h, method: 'GET' }));
     }
 
     const body = req.method === 'POST' ? await req.json().catch(() => ({})) : null;
     return stub.fetch(new Request('https://do/' + p.slice(5), {
       method: req.method,
-      headers: { 'content-type': 'application/json', 'x-member': me.id },
+      headers: { 'content-type': 'application/json', 'x-member': me.id, 'x-room': roomId },
       body: body ? JSON.stringify(body) : null
     }));
   }
