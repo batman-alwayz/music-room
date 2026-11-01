@@ -1,17 +1,24 @@
 import { setOffset, serverNow, startLoop } from './sync.js';
 import { ytm, web, manual } from './players.js';
+import { createVinyl, parseLrc } from './vinyl.js';
 
 const QUOTA = 10;                                            // songs one person may have queued
 const fresh = () => ({
   queue: [], playing: null, present: {}, armed: {}, part: {}, votes: [], pvotes: [], hist: [],
   startAt: 0, goAt: 0, endAt: 0, seq: 0, paused: false, pos: 0
 });
+const store = {
+  get: k => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }
+};
 
 let S = fresh();
-let me, player, loop, ws, ready = false, room = null;
+let me, player, vinyl, loop, ws, ready = false, room = null;
 let wantArmed = true, beganSeq = -1, beginTimer, playToken = 0, lastDrift = 0, backoff = 1000, lastArm = 0;
-let status = '', routeNote = '';
+let status = '', routeNote = '', tab = 'search', lastItems = [], lastVinylTid = null;
+let showVid = store.get('vid') === '1', spinLyr = store.get('spin') === '1';
 let pls = [], openPl = null, plFrom = 'lobby', renaming = false, delArmed = false, toastT;
+const lyrCache = new Map();
 
 const $ = s => document.querySelector(s);
 const on = (id, ev, fn) => $('#' + id).addEventListener(ev, fn);
@@ -35,14 +42,21 @@ async function api(path, body) {
   const j = await r.json().catch(() => ({}));
   return r.ok ? j : { ...j, error: j.error || String(r.status) };
 }
+// turn a failed API answer into something a person can act on
+const explain = (r, fallback) =>
+  /no such table/i.test(r.detail || '') ? 'The database is missing its newest tables — run schema.sql once (see the update steps)'
+  : r.error === 'limit' ? 'Limit reached'
+  : r.error === 'network' ? 'Could not reach the server'
+  : r.detail ? `${fallback}: ${r.detail}` : fallback;
 
 function show(name) {
   for (const id of ['login', 'lobby', 'room', 'pls']) $('#' + id).hidden = id !== name;
   $('#webwrap').style.visibility = name === 'room' ? 'visible' : 'hidden';
+  if (vinyl) { if (name === 'room') vinyl.start(); else vinyl.stop(); }
 }
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
-  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2500);
+  clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 3000);
 }
 
 // ---------- native shell bridge (Android WebView / iOS WKWebView) ----------
@@ -58,15 +72,14 @@ function sendToShell(name, arg) {
 }
 
 // ---------- player: everyone plays through YouTube ----------
-function route() {
-  if (new URLSearchParams(location.search).has('manual')) return 'manual';
-  return hasShell() ? 'ytm' : 'web';
-}
+const route = () => new URLSearchParams(location.search).has('manual') ? 'manual' : hasShell() ? 'ytm' : 'web';
+const applyVid = () => $('#webwrap').classList.toggle('min', !showVid);     // hidden = off-screen but still playing
+
 async function pick() {
   const r = route();
   if (r === 'ytm') player = ytm(sendToShell);
   else if (r === 'web') {
-    $('#webwrap').hidden = false;
+    $('#webwrap').hidden = false; applyVid();
     player = web('webplayer', {
       onLive: v => { send({ t: 'live', v }); if (v) $('#tap').hidden = true; },
       onBlocked: () => { $('#tap').hidden = false; },
@@ -97,7 +110,7 @@ async function createRoom() {
   $('#lerr').textContent = '';
   if (!name) { $('#lerr').textContent = 'Give the room a name'; return; }
   const r = await api('rooms', { name });
-  if (r.error) { $('#lerr').textContent = r.error === 'limit' ? 'You can own up to 5 rooms' : 'Could not create the room'; return; }
+  if (r.error) { $('#lerr').textContent = explain(r, 'Could not create the room'); return; }
   $('#rname').value = '';
   openRoom(r);
 }
@@ -109,7 +122,7 @@ async function joinCode(code) {
   if (r.error) {
     history.replaceState(null, '', location.pathname);
     show('lobby'); loadLobby();
-    $('#lerr').textContent = 'No room with that code';
+    $('#lerr').textContent = r.error === 'none' ? 'No room with that code' : explain(r, 'Could not join');
     return;
   }
   openRoom(r);
@@ -121,10 +134,12 @@ function closeWS() { const w = ws; ws = null; if (w) { w.onclose = null; w.onmes
 
 function openRoom(r) {
   closeWS(); clearTimers();
-  room = r; S = fresh(); beganSeq = -1; lastDrift = 0; wantArmed = true; status = '';
+  room = r; S = fresh(); beganSeq = -1; lastDrift = 0; wantArmed = true; status = ''; lastVinylTid = null;
+  vinyl.setTrack(null);
   history.replaceState(null, '', '#r=' + r.id);
   $('#rtitle').textContent = r.name;
   $('#rcodeline').textContent = 'Code ' + r.id;
+  setTab('search');
   show('room'); render(); connectWS();
 }
 function leaveRoom() {
@@ -149,6 +164,11 @@ function onFrame({ s, now }) {
   setOffset(now);
   const was = S.playing, wasPaused = S.paused;
   S = s;
+  if ((S.playing?.tid || null) !== lastVinylTid) {           // new song on the record
+    lastVinylTid = S.playing?.tid || null;
+    vinyl.setTrack(S.playing);
+    if (S.playing) loadLyrics(S.playing);
+  }
   render();
   if (S.playing && S.part?.[me.id]) {
     if (S.paused && !wasPaused) {                            // someone paused the room
@@ -174,8 +194,7 @@ async function begin() {
   const t = S.playing, seq = S.seq;
   clearTimers();
   const token = ++playToken;
-  // start slightly before the countdown ends so everyone lands on 0:00 together
-  const wait = Math.max(0, S.goAt - serverNow() - 400);
+  const wait = Math.max(0, S.goAt - serverNow() - 400);      // start a little early so everyone lands on 0:00 together
   beginTimer = setTimeout(async () => {
     if (token !== playToken) return;
     const late = Math.max(0, serverNow() - S.startAt);
@@ -202,10 +221,29 @@ function paintDrift(d) {
   if (e && !S.paused) e.textContent = `sync ${d >= 0 ? '+' : ''}${Math.round(d)} ms`;
 }
 
+// ---------- lyrics ----------
+async function loadLyrics(t) {
+  if (lyrCache.has(t.tid)) { vinyl.setLyrics(lyrCache.get(t.tid)); return; }
+  vinyl.setLyrics(null);
+  const r = await api('lyrics?' + new URLSearchParams({ tid: t.tid, title: t.title, artist: t.artist || '', dur: String(t.dur) }));
+  const parsed = r.lrc ? parseLrc(r.lrc) : null;
+  lyrCache.set(t.tid, parsed);
+  if (S.playing?.tid === t.tid) vinyl.setLyrics(parsed);
+}
+
 // ---------- room UI ----------
 function setStatus(t) { status = t; render(); }
 const nameOf = id => S.present[id]?.name || id;
 const trackOf = t => ({ tid: t.tid, title: t.title, artist: t.artist, dur: t.dur, cover: t.cover });
+const inRoom = tid => S.playing?.tid === tid || S.queue.some(q => q.tid === tid);
+
+function setTab(t) {
+  if (t === 'queue' && matchMedia('(min-width:1050px)').matches) t = 'search';   // wide screens show the queue beside the tabs
+  tab = t;
+  $('.tabsarea').dataset.tab = t;
+  document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  if (t === 'pls') loadMiniPls();
+}
 
 function render() {
   if (!me || !room) return;
@@ -225,7 +263,7 @@ function render() {
       h('button', { class: 'btn ghost', style: 'margin-top:6px', onclick: () => pickPlaylist(trackOf(t)) }, '♪ Save to playlist')
     );
   } else {
-    np.append(h('div', { class: 's' }, S.queue.length ? 'Waiting for everyone to be ready…' : 'Queue is empty — add a song'));
+    np.append(h('div', { class: 's' }, S.queue.length ? 'Waiting for everyone to be ready…' : 'Queue is empty — search a song and add it'));
   }
 
   const votes = [S.votes.length && `skip ${S.votes.length}/${need}`, S.pvotes?.length && `back ${S.pvotes.length}/${need}`].filter(Boolean).join(' · ');
@@ -233,6 +271,8 @@ function render() {
     h('button', { class: 'btn', title: 'Previous (vote)', onclick: () => send({ t: 'prev' }) }, '⏮'),
     h('button', { class: 'btn', disabled: !S.playing, title: S.paused ? 'Resume' : 'Pause', onclick: () => send({ t: S.paused ? 'resume' : 'pause' }) }, S.paused ? '▶' : '⏸'),
     h('button', { class: 'btn', disabled: !S.playing, title: 'Skip (vote)', onclick: () => send({ t: 'skip' }) }, '⏭'),
+    h('button', { class: 'btn ghost small', title: 'Lyrics turn with the record', onclick: () => { spinLyr = !spinLyr; store.set('spin', spinLyr ? '1' : '0'); render(); } }, spinLyr ? '↻ Lyrics spin: on' : '↻ Lyrics spin: off'),
+    route() === 'web' && h('button', { class: 'btn ghost small', onclick: () => { showVid = !showVid; store.set('vid', showVid ? '1' : '0'); applyVid(); render(); } }, showVid ? '📺 Hide video' : '📺 Show video'),
     votes && h('div', { class: 's' }, votes)
   ].filter(Boolean));
 
@@ -244,17 +284,28 @@ function render() {
       h('span', { class: 'chip' }, `${p.name}${p.away ? ' (away)' : S.playing ? (S.part?.[p.id] ? (p.live ? ' 🔊' : ' …') : ' (next song)') : S.armed[p.id] ? ' ✓' : ''}`)))
   ].filter(Boolean));
 
+  $('#qtab').textContent = `Queue${S.queue.length ? ` (${S.queue.length})` : ''}`;
   const qEl = $('#queue'); qEl.replaceChildren();
-  if (!S.queue.length) qEl.append(h('div', { class: 's' }, 'Nothing queued'));
+  if (!S.queue.length) qEl.append(h('div', { class: 's' }, 'Nothing queued yet'));
   S.queue.forEach((q, i) => {
     const mine = q.by === me.id || admin;
     qEl.append(h('div', { class: 'row' },
+      q.cover && h('img', { src: q.cover, width: '48', height: '36', style: 'border-radius:6px;object-fit:cover' }),
       h('div', { style: 'flex:1;min-width:0' }, h('div', {}, q.title), h('div', { class: 's' }, `${q.artist} · ${nameOf(q.by)}`)),
       mine && i > 0 && h('button', { class: 'btn ghost', title: 'Move up', onclick: () => send({ t: 'move', tid: q.tid, pos: i - 1 }) }, '↑'),
       mine && i < S.queue.length - 1 && h('button', { class: 'btn ghost', title: 'Move down', onclick: () => send({ t: 'move', tid: q.tid, pos: i + 1 }) }, '↓'),
       h('button', { class: 'btn ghost', title: 'Save to playlist', onclick: () => pickPlaylist(trackOf(q)) }, '♪'),
       mine && h('button', { class: 'btn ghost', title: 'Remove', onclick: () => send({ t: 'remove', tid: q.tid }) }, '✕')));
   });
+
+  // search results stay put: just flip their buttons to "Added" as songs land in the queue
+  document.querySelectorAll('#results [data-add]').forEach(b => {
+    const has = inRoom(b.dataset.add);
+    b.disabled = has; b.textContent = has ? '✓ Added' : 'Add';
+  });
+  const left = lastItems.filter(t => !inRoom(t.tid)).length;
+  $('#addall').disabled = !left;
+  $('#resinfo').textContent = left ? `${left} not queued yet` : 'All of these are queued';
 }
 
 setInterval(() => {                                          // countdown / paused hint
@@ -277,7 +328,7 @@ async function search(q, box, actions) {
   box.replaceChildren(h('div', { class: 's' }, 'Searching…'));
   const r = await api('search?q=' + encodeURIComponent(q));
   box.replaceChildren();
-  if (r.error) { box.append(h('div', { class: 's' }, 'Search failed, try again')); return; }
+  if (r.error) { box.append(h('div', { class: 's' }, 'Search failed, try again')); return []; }
   if (!r.items?.length) box.append(h('div', { class: 's' }, 'Nothing found'));
   for (const t of r.items || []) {
     box.append(h('div', { class: 'row' },
@@ -285,28 +336,60 @@ async function search(q, box, actions) {
       h('div', { style: 'flex:1;min-width:0' }, h('div', {}, t.title), h('div', { class: 's' }, t.artist)),
       ...actions(t, box)));
   }
+  return r.items || [];
 }
 
 // ---------- playlists ----------
+async function createPl(input, errEl, after) {
+  const name = input.value.trim();
+  errEl.textContent = '';
+  if (!name) { errEl.textContent = 'Type a name first'; return; }
+  const r = await api('playlists', { name });
+  if (r.error) { errEl.textContent = explain(r, 'Could not create the playlist'); return; }
+  input.value = ''; toast('Playlist created'); after?.();
+}
+
 async function pickPlaylist(track) {                         // bottom sheet: save a song to one of my playlists
   const r = await api('playlists');
   const ov = $('#overlay'); ov.replaceChildren(); ov.hidden = false;
   const close = () => { ov.hidden = true; };
   const save = async id => {
     const x = await api('playlists/' + id + '/add', { track });
-    close(); toast(x.error ? (x.error === 'limit' ? 'Playlist is full (200 songs)' : 'Could not save') : 'Saved to playlist');
+    close(); toast(x.error ? (x.error === 'limit' ? 'Playlist is full (200 songs)' : explain(x, 'Could not save')) : 'Saved to playlist');
   };
   const nameIn = h('input', { placeholder: 'New playlist name', maxlength: '30' });
+  const err = h('div', { class: 's err' });
   ov.replaceChildren(h('div', { class: 'sheet' },
     h('div', { class: 't' }, 'Save to playlist'),
     ...(r.items || []).map(p => h('button', { class: 'btn ghost', onclick: () => save(p.id) }, `${p.name} (${p.n})`)),
     nameIn,
     h('button', { class: 'btn', onclick: async () => {
-      const name = nameIn.value.trim(); if (!name) return;
+      const name = nameIn.value.trim(); if (!name) { err.textContent = 'Type a name first'; return; }
       const c = await api('playlists', { name });
-      if (c.id) save(c.id); else toast('Could not create (max 30 playlists)');
+      if (c.id) save(c.id); else err.textContent = explain(c, 'Could not create the playlist');
     } }, 'Create & save'),
+    err,
     h('button', { class: 'btn ghost', onclick: close }, 'Cancel')));
+}
+
+// the "Playlists" tab inside a room: queue a whole playlist with one tap
+async function loadMiniPls() {
+  const r = await api('playlists');
+  const box = $('#plmini'); box.replaceChildren();
+  if (r.error) { box.append(h('div', { class: 's err' }, explain(r, 'Could not load playlists'))); return; }
+  if (!r.items?.length) box.append(h('div', { class: 's' }, 'No playlists yet — create one above, or tap ♪ on any song'));
+  for (const p of r.items || []) {
+    box.append(h('div', { class: 'row' },
+      h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name), h('div', { class: 's' }, `${p.n} song${p.n === 1 ? '' : 's'}`)),
+      h('button', { class: 'btn', disabled: !p.n, onclick: () => queuePlaylist(p) }, '▶ Queue'),
+      h('button', { class: 'btn ghost', onclick: async () => { await showPlaylists('room'); openPlaylist(p); } }, 'Open')));
+  }
+}
+function queuePlaylist(p) {
+  const free = Math.max(0, QUOTA - S.queue.filter(q => q.by === me.id).length);
+  send({ t: 'addpl', id: p.id });
+  toast(free ? `Queueing up to ${Math.min(free, p.n ?? free)} songs from ${p.name}` : `You already have ${QUOTA} songs queued`);
+  setTab(matchMedia('(min-width:1050px)').matches ? 'pls' : 'queue');
 }
 
 async function showPlaylists(from) {
@@ -314,6 +397,7 @@ async function showPlaylists(from) {
 }
 async function loadPls() {
   const r = await api('playlists');
+  if (r.error) $('#plerr').textContent = explain(r, 'Could not load playlists');
   pls = r.items || [];
   renderPls();
 }
@@ -383,28 +467,38 @@ function wire() {
     catch { toast(link); }
   });
   on('tap', 'click', async () => { await player?.resume?.(); $('#tap').hidden = true; });
-  on('q', 'keydown', e => {
+  document.querySelectorAll('.tabbtn').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  matchMedia('(min-width:1050px)').addEventListener?.('change', () => setTab(tab));
+
+  // search: results stay on screen so you can add several songs, or all of them
+  on('q', 'keydown', async e => {
     if (e.key !== 'Enter' || !e.target.value.trim()) return;
-    search(e.target.value.trim(), $('#results'), (t, box) => [
-      h('button', { class: 'btn', onclick: () => { send({ t: 'add', ...trackOf(t) }); box.replaceChildren(); $('#q').value = ''; } }, 'Add'),
+    $('#resbar').hidden = true; lastItems = [];
+    lastItems = await search(e.target.value.trim(), $('#results'), t => [
+      h('button', { class: 'btn', 'data-add': t.tid, onclick: () => { send({ t: 'add', ...trackOf(t) }); } }, 'Add'),
       h('button', { class: 'btn ghost', title: 'Save to playlist', onclick: () => pickPlaylist(trackOf(t)) }, '♪')
     ]);
+    $('#resbar').hidden = !lastItems.length;
+    render();
   });
+  on('addall', 'click', () => {
+    const todo = lastItems.filter(t => !inRoom(t.tid));
+    const free = Math.max(0, QUOTA - S.queue.filter(q => q.by === me.id).length);
+    if (!todo.length) return;
+    send({ t: 'addmany', tracks: todo.map(trackOf) });
+    toast(free ? (todo.length > free ? `Adding ${free} of ${todo.length} (limit ${QUOTA} queued per person)` : `Adding ${todo.length} songs`) : `You already have ${QUOTA} songs queued`);
+  });
+
+  on('plminicreate', 'click', () => createPl($('#plmininame'), $('#plerr2'), loadMiniPls));
+  on('plmininame', 'keydown', e => { if (e.key === 'Enter') $('#plminicreate').click(); });
 
   on('plback', 'click', () => { if (plFrom === 'room' && room) show('room'); else { show('lobby'); loadLobby(); } });
   on('pldback', 'click', () => { openPl = null; loadPls(); });
-  on('plcreate', 'click', async () => {
-    const name = $('#plname').value.trim(); if (!name) return;
-    const r = await api('playlists', { name });
-    if (r.error) toast('Could not create (max 30 playlists)');
-    else { $('#plname').value = ''; loadPls(); }
-  });
+  on('plcreate', 'click', () => createPl($('#plname'), $('#plerr'), loadPls));
   on('plname', 'keydown', e => { if (e.key === 'Enter') $('#plcreate').click(); });
   on('plplay', 'click', () => {
     if (!room || !openPl?.tracks.length) return;
-    const free = Math.max(0, QUOTA - S.queue.filter(q => q.by === me.id).length);
-    send({ t: 'addpl', id: openPl.id });
-    toast(free ? `Queueing up to ${Math.min(free, openPl.tracks.length)} songs` : `You already have ${QUOTA} songs queued`);
+    queuePlaylist({ id: openPl.id, name: openPl.name, n: openPl.tracks.length });
     show('room');
   });
   on('plrename', 'click', async () => {
@@ -427,7 +521,7 @@ function wire() {
     search(e.target.value.trim(), $('#plres'), t => [
       h('button', { class: 'btn', onclick: async () => {
         const x = await api('playlists/' + openPl.id + '/add', { track: trackOf(t) });
-        toast(x.error ? 'Could not add' : 'Added');
+        toast(x.error ? explain(x, 'Could not add') : 'Added');
         openPlaylist(openPl);
       } }, 'Add')
     ]);
@@ -436,6 +530,11 @@ function wire() {
 
 async function init() {
   wire();
+  vinyl = createVinyl($('#vinyl'), {
+    time: () => S.playing ? (S.paused ? S.pos : serverNow() - S.startAt) : 0,
+    playing: () => !!S.playing && !S.paused && serverNow() >= S.goAt,
+    spin: () => spinLyr
+  });
   const r = await fetch('/api/me');
   if (r.status === 401) { show('login'); return; }
   me = await r.json();

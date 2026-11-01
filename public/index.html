@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0c0d10">
 <link rel="manifest" href="/manifest.json">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
 <style>
   html{background:#0c0d10;color:#e9ebee;font:14px Inter,system-ui}
   body{margin:0;padding:env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 160px)}
@@ -15,18 +17,63 @@
   .t{font-size:18px;font-weight:600}.s{color:#8b9099;font-size:12px;margin-top:2px}.err{color:#ff8a8a}
   .top{display:flex;gap:8px;align-items:center;padding:12px 0}
   .card{background:#14161a;border-radius:12px;padding:12px;margin:10px 0}
-  #np{padding:6px 0}
-  #ctl{display:flex;gap:8px;align-items:center;padding:6px 0}
-  #ctl .btn{font-size:18px;min-width:48px}
-  #armbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:6px 0}
-  .chips{display:flex;gap:6px;flex-wrap:wrap}.chip{background:#1a1d22;border-radius:99px;padding:3px 9px;font-size:12px}
   input{width:100%;box-sizing:border-box;background:#14161a;color:inherit;border:1px solid #1a1d22;border-radius:9px;padding:10px;font:inherit;margin:6px 0}
   #login{padding-top:22vh;max-width:320px;margin:0 auto}
+
+  /* ---- room layout: player | tabs (queue gets its own column on wide screens) ---- */
+  .main{display:grid;gap:18px;grid-template-columns:minmax(0,1fr);max-width:1400px;margin:0 auto}
+  .tabbar{display:flex;gap:6px;margin-bottom:8px}
+  .tabbtn{background:#14161a;color:#8b9099;border:0;border-radius:99px;padding:8px 14px;font:inherit;cursor:pointer}
+  .tabbtn.on{background:#e9ebee;color:#0c0d10}
+  .tabpanel{display:none}
+  .tabsarea[data-tab="search"] #tab-search,.tabsarea[data-tab="queue"] #tab-queue,.tabsarea[data-tab="pls"] #tab-pls{display:block}
+  @media (min-width:1050px){
+    .main{grid-template-columns:minmax(380px,460px) 1fr}
+    .tabsarea{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+    .tabbar{grid-column:1}
+    #tab-search,#tab-pls{grid-column:1}
+    #tab-queue{display:block !important;grid-column:2;grid-row:1 / span 3}
+    .tabbtn[data-tab="queue"]{display:none}
+  }
+
+  /* ---- the golden cuboid with an OLED screen ---- */
+  .stage{perspective:1300px;display:flex;justify-content:center;padding:30px 0 32px;position:relative}
+  .stage::after{content:"";position:absolute;left:14%;right:14%;bottom:8px;height:22px;background:radial-gradient(#000a,transparent 70%);filter:blur(7px)}
+  .box{--d:30px;position:relative;width:min(94vw,420px);transform-style:preserve-3d;
+       transform:rotateX(-10deg) rotateY(-15deg);animation:sway 9s ease-in-out infinite alternate}
+  @keyframes sway{from{transform:rotateX(-10deg) rotateY(-17deg)}to{transform:rotateX(-8deg) rotateY(-11deg)}}
+  @keyframes sway-s{from{transform:rotateX(-7deg) rotateY(-9deg)}to{transform:rotateX(-6deg) rotateY(-5deg)}}
+  @media (max-width:600px){.box{--d:22px;animation-name:sway-s}}
+  @media (prefers-reduced-motion:reduce){.box{animation:none}}
+  .face{position:absolute}
+  .front{position:relative;border-radius:16px;padding:14px;
+    background:linear-gradient(145deg,#fff1b8 0%,#f0c75e 22%,#c9922f 55%,#e8bd5a 78%,#9c6c1c 100%);
+    box-shadow:inset 0 0 0 2px #fff4c488,inset 0 -14px 24px #7a4f0f55,inset 0 12px 20px #fff7d855}
+  .topf{left:0;bottom:100%;width:100%;height:var(--d);transform-origin:bottom;transform:rotateX(90deg);
+    background:linear-gradient(#fff6cf,#e8bf58);border-radius:16px 16px 0 0}
+  .rightf{top:0;left:100%;width:var(--d);height:100%;transform-origin:left;transform:rotateY(90deg);
+    background:linear-gradient(90deg,#c8942f,#7d5413);border-radius:0 16px 16px 0}
+  .screen{position:relative;background:#02030a;border-radius:12px;padding:8px;display:grid;place-items:center;
+    box-shadow:inset 0 0 26px #000,0 0 0 2px #5b3d0c,0 0 0 4px #ffe9a866}
+  .screen::after{content:"";position:absolute;inset:0;border-radius:12px;pointer-events:none;
+    background:linear-gradient(120deg,#ffffff18 0%,#ffffff06 30%,transparent 42%)}
+  #vinyl{image-rendering:pixelated;display:block;filter:drop-shadow(0 0 3px #38d4ff88)}
+  .led{position:absolute;right:22px;bottom:4px;width:6px;height:6px;border-radius:50%;background:#7dfaff;box-shadow:0 0 8px #7dfaff}
+
+  #np{padding:4px 0;text-align:center}
+  #ctl{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;padding:6px 0}
+  #ctl .btn{font-size:18px;min-width:48px}
+  #ctl .btn.small{font-size:13px;min-width:0}
+  #armbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;padding:6px 0}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}.chip{background:#1a1d22;border-radius:99px;padding:3px 9px;font-size:12px}
+
   #overlay{position:fixed;inset:0;background:#000a;display:flex;align-items:flex-end;justify-content:center;z-index:10}
   #overlay[hidden]{display:none}
   .sheet{background:#14161a;width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto;box-sizing:border-box;padding-bottom:calc(env(safe-area-inset-bottom) + 16px)}
   #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 20px);background:#e9ebee;color:#0c0d10;padding:8px 14px;border-radius:99px;z-index:20;max-width:90vw}
   #toast[hidden]{display:none}
+  #webwrap{position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 10px);transition:right .2s}
+  #webwrap.min{right:-420px}                       /* hidden off-screen, still playing the audio */
 </style>
 
 <div id="login" hidden>
@@ -39,20 +86,22 @@
 
 <div id="lobby" hidden>
   <div class="top"><div class="t" style="flex:1">Room</div><a class="s" href="/auth/logout">Log out</a></div>
-  <div class="card">
-    <div class="s">Create a room</div>
-    <input id="rname" placeholder="Room name" maxlength="30">
-    <button id="rcreate" class="btn">Create room</button>
+  <div style="max-width:520px;margin:0 auto">
+    <div class="card">
+      <div class="s">Create a room</div>
+      <input id="rname" placeholder="Room name" maxlength="30">
+      <button id="rcreate" class="btn">Create room</button>
+    </div>
+    <div class="card">
+      <div class="s">Join a room</div>
+      <input id="rcode" placeholder="Room code (6 characters)" maxlength="6" autocapitalize="characters" autocomplete="off">
+      <button id="rjoin" class="btn">Join room</button>
+    </div>
+    <div id="lerr" class="s err"></div>
+    <div class="s" style="margin-top:14px">My rooms</div>
+    <div id="myrooms"></div>
+    <button id="toPls" class="btn ghost" style="margin-top:14px">♪ My playlists</button>
   </div>
-  <div class="card">
-    <div class="s">Join a room</div>
-    <input id="rcode" placeholder="Room code (6 characters)" maxlength="6" autocapitalize="characters" autocomplete="off">
-    <button id="rjoin" class="btn">Join room</button>
-  </div>
-  <div id="lerr" class="s err"></div>
-  <div class="s" style="margin-top:14px">My rooms</div>
-  <div id="myrooms"></div>
-  <button id="toPls" class="btn ghost" style="margin-top:14px">♪ My playlists</button>
 </div>
 
 <div id="room" hidden>
@@ -61,42 +110,84 @@
     <div style="flex:1;min-width:0"><div id="rtitle" class="t"></div><div id="rcodeline" class="s"></div></div>
     <button id="invite" class="btn ghost">Invite</button>
   </div>
-  <div id="np"></div>
-  <div id="ctl"></div>
-  <div id="armbar"></div>
-  <button id="tap" class="btn" hidden style="width:100%;margin:6px 0">🔊 Tap to hear the song</button>
-  <input id="q" placeholder="Search a song, or paste a YouTube link" enterkeyhint="search">
-  <div id="results"></div>
-  <div class="row" style="border:0"><div class="s" style="flex:1">Queue</div><button id="toPls2" class="btn ghost">♪ Playlists</button></div>
-  <div id="queue"></div>
+  <div class="main">
+    <div class="left">
+      <div class="stage">
+        <div class="box">
+          <div class="face front">
+            <div class="screen"><canvas id="vinyl" width="160" height="160"></canvas></div>
+            <div class="led"></div>
+          </div>
+          <div class="face topf"></div>
+          <div class="face rightf"></div>
+        </div>
+      </div>
+      <div id="np"></div>
+      <div id="ctl"></div>
+      <div id="armbar"></div>
+      <button id="tap" class="btn" hidden style="width:100%;margin:6px 0">🔊 Tap to hear the song</button>
+    </div>
+
+    <div class="tabsarea" data-tab="search">
+      <div class="tabbar">
+        <button class="tabbtn on" data-tab="search">Search</button>
+        <button class="tabbtn" data-tab="queue" id="qtab">Queue</button>
+        <button class="tabbtn" data-tab="pls">Playlists</button>
+      </div>
+
+      <div id="tab-search" class="tabpanel">
+        <input id="q" placeholder="Search a song or artist, or paste a YouTube link" enterkeyhint="search">
+        <div id="resbar" class="row" hidden style="border:0"><button id="addall" class="btn">＋ Add all</button><span id="resinfo" class="s"></span></div>
+        <div id="results"></div>
+      </div>
+
+      <div id="tab-queue" class="tabpanel">
+        <div class="s" style="margin:4px 0">Up next</div>
+        <div id="queue"></div>
+      </div>
+
+      <div id="tab-pls" class="tabpanel">
+        <div class="card">
+          <input id="plmininame" placeholder="New playlist name" maxlength="30">
+          <button id="plminicreate" class="btn">Create playlist</button>
+          <div id="plerr2" class="s err"></div>
+        </div>
+        <div id="plmini"></div>
+        <button id="toPls2" class="btn ghost" style="margin-top:10px">Manage playlists</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="pls" hidden>
   <div class="top"><button id="plback" class="btn ghost">←</button><div class="t" style="flex:1">Playlists</div></div>
-  <div id="plhome">
-    <div class="card">
-      <input id="plname" placeholder="New playlist name" maxlength="30">
-      <button id="plcreate" class="btn">Create playlist</button>
+  <div style="max-width:560px;margin:0 auto">
+    <div id="plhome">
+      <div class="card">
+        <input id="plname" placeholder="New playlist name" maxlength="30">
+        <button id="plcreate" class="btn">Create playlist</button>
+        <div id="plerr" class="s err"></div>
+      </div>
+      <div id="pllist"></div>
     </div>
-    <div id="pllist"></div>
-  </div>
-  <div id="pldetail" hidden>
-    <div class="top"><button id="pldback" class="btn ghost">←</button><div id="pltitle" class="t" style="flex:1"></div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button id="plplay" class="btn">▶ Play in room</button>
-      <button id="plrename" class="btn ghost">Rename</button>
-      <button id="pldel" class="btn ghost">Delete</button>
+    <div id="pldetail" hidden>
+      <div class="top"><button id="pldback" class="btn ghost">←</button><div id="pltitle" class="t" style="flex:1"></div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="plplay" class="btn">▶ Play in room</button>
+        <button id="plrename" class="btn ghost">Rename</button>
+        <button id="pldel" class="btn ghost">Delete</button>
+      </div>
+      <input id="plrnin" hidden maxlength="30">
+      <input id="plq" placeholder="Search a song to add to this playlist" enterkeyhint="search">
+      <div id="plres"></div>
+      <div class="s" style="margin-top:10px">Songs</div>
+      <div id="pltracks"></div>
     </div>
-    <input id="plrnin" hidden maxlength="30">
-    <input id="plq" placeholder="Search a song to add to this playlist" enterkeyhint="search">
-    <div id="plres"></div>
-    <div class="s" style="margin-top:10px">Songs</div>
-    <div id="pltracks"></div>
   </div>
 </div>
 
 <div id="overlay" hidden></div>
 <div id="toast" hidden></div>
-<div id="webwrap" hidden style="position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 10px)"><div id="webplayer"></div></div>
+<div id="webwrap" hidden class="min"><div id="webplayer"></div></div>
 <script type="module" src="/app.js"></script>
 </html>

@@ -3,6 +3,7 @@ import { Room } from './room.js';
 import { rooms, isMember } from './rooms.js';
 import { playlists } from './playlists.js';
 import { ytSearch, ytLookup, linkId } from './search.js';
+import { lrclib } from './lyrics.js';
 export { Room };
 
 const json = (d, s = 200) => new Response(JSON.stringify(d), {
@@ -11,6 +12,12 @@ const json = (d, s = 200) => new Response(JSON.stringify(d), {
 
 export default {
   async fetch(req, env) {
+    try { return await route(req, env); }
+    catch (e) { return json({ error: 'server', detail: String(e?.message || e).slice(0, 200) }, 500); }
+  }
+};
+
+async function route(req, env) {
     const u = new URL(req.url);
     const p = u.pathname;
 
@@ -36,6 +43,15 @@ export default {
       return json({ items });
     }
 
+    // album art (the video thumbnail), served from our own origin so the page may read its pixels
+    if (p === '/api/cover') {
+      const id = u.searchParams.get('id') || '';
+      if (!/^[\w-]{11}$/.test(id)) return json({ error: 'bad' }, 400);
+      const r = await fetch(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`, { cf: { cacheTtl: 86400, cacheEverything: true } });
+      if (!r.ok) return json({ error: 'nf' }, 404);
+      return new Response(r.body, { headers: { 'content-type': r.headers.get('content-type') || 'image/jpeg', 'cache-control': 'private, max-age=86400' } });
+    }
+
     if (p === '/api/lyrics') {
       if (req.method === 'POST') {
         const b = await req.json();
@@ -46,9 +62,20 @@ export default {
         ).bind(b.tid, b.lrc, b.source || 'user', me.id).run();
         return json({ ok: true });
       }
-      const row = await env.DB.prepare('SELECT lrc, source FROM lyrics WHERE track_id=?')
-        .bind(u.searchParams.get('tid')).first();
-      return row ? json(row) : json({ error: 'none' }, 404);
+      const tid = u.searchParams.get('tid') || '';
+      const row = await env.DB.prepare('SELECT lrc, source FROM lyrics WHERE track_id=?').bind(tid).first();
+      if (row?.lrc) return json(row);
+      const title = u.searchParams.get('title') || '';
+      if (!/^[\w-]{11}$/.test(tid) || !title) return json({ error: 'none' }, 404);
+      if (await env.KV.get('lyr0:' + tid)) return json({ error: 'none' }, 404);        // recently not found
+      const hit = await lrclib(title, u.searchParams.get('artist') || '', +u.searchParams.get('dur') || 0);
+      if (!hit) { await env.KV.put('lyr0:' + tid, '1', { expirationTtl: 21600 }); return json({ error: 'none' }, 404); }
+      const source = hit.synced ? 'lrclib-synced' : 'lrclib-plain';
+      await env.DB.prepare(
+        `INSERT INTO lyrics (track_id,lrc,source,uploaded_by) VALUES (?,?,?,?)
+         ON CONFLICT(track_id) DO UPDATE SET lrc=excluded.lrc, source=excluded.source`
+      ).bind(tid, hit.lrc, source, me.id).run();
+      return json({ lrc: hit.lrc, source });
     }
 
     if (p.startsWith('/api/rooms')) return rooms(req, env, me, p);
@@ -72,5 +99,4 @@ export default {
       headers: { 'content-type': 'application/json', 'x-member': me.id, 'x-room': roomId },
       body: body ? JSON.stringify(body) : null
     }));
-  }
-};
+}

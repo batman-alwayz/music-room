@@ -1,4 +1,10 @@
 const QUOTA = 10;                                            // songs one person may have queued
+const cover = c => (typeof c === 'string' && c.startsWith('https://i.ytimg.com/')) ? c : null;
+const okTrack = t => /^[\w-]{11}$/.test(t?.tid || '') && Number(t.dur) > 0;
+const mk = (t, who) => ({
+  tid: t.tid, title: String(t.title || '').slice(0, 200), artist: String(t.artist || '').slice(0, 100),
+  dur: Number(t.dur), yt_id: t.tid, cover: cover(t.cover), by: who, at: Date.now()
+});
 
 export class Room {
   constructor(state, env) {
@@ -97,13 +103,10 @@ export class Room {
         break;
 
       case 'add': {
-        if (!b.tid || !(Number(b.dur) > 0)) break;
+        if (!okTrack(b)) break;
         if (s.playing?.tid === b.tid || s.queue.some(q => q.tid === b.tid)) break;   // idempotent
         if (s.queue.filter(q => q.by === who).length >= QUOTA) break;
-        const track = {
-          tid: b.tid, title: b.title, artist: b.artist, dur: Number(b.dur),
-          yt_id: b.tid, cover: b.cover, by: who, at: Date.now()
-        };
+        const track = mk(b, who);
         const burst = s.queue.slice(-2).filter(q => q.by === who).length;
         let at = s.queue.length;
         if (burst >= 2) {
@@ -111,6 +114,15 @@ export class Room {
           if (i >= 0) at = i + 1;
         }
         s.queue.splice(at, 0, track);
+        break;
+      }
+      case 'addmany': {                                     // "Add all" from search results, kept in order
+        let free = QUOTA - s.queue.filter(q => q.by === who).length;
+        for (const t of (Array.isArray(b.tracks) ? b.tracks : []).slice(0, 50)) {
+          if (free <= 0) break;
+          if (!okTrack(t) || s.playing?.tid === t.tid || s.queue.some(q => q.tid === t.tid)) continue;
+          s.queue.push(mk(t, who)); free--;
+        }
         break;
       }
       case 'addpl': {                                       // queue one of MY playlists, in order
@@ -122,7 +134,7 @@ export class Room {
         for (const r of results || []) {
           if (free <= 0) break;
           if (s.playing?.tid === r.tid || s.queue.some(q => q.tid === r.tid)) continue;
-          s.queue.push({ tid: r.tid, title: r.title, artist: r.artist, dur: r.dur, yt_id: r.tid, cover: r.cover, by: who, at: Date.now() });
+          s.queue.push(mk(r, who));
           free--;
         }
         break;

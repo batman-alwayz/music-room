@@ -2,7 +2,7 @@
 const C = 'v2';
 self.addEventListener('install', e => {
   self.skipWaiting();
-  e.waitUntil(caches.open(C).then(c => c.addAll(['/', '/app.js', '/sync.js', '/players.js'])));
+  e.waitUntil(caches.open(C).then(c => c.addAll(['/', '/app.js', '/sync.js', '/players.js', '/vinyl.js'])));
 });
 self.addEventListener('activate', e => e.waitUntil(
   caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k))))
