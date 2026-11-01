@@ -67,9 +67,10 @@ async function route(req, env) {
       if (row?.lrc) return json(row);
       const title = u.searchParams.get('title') || '';
       if (!/^[\w-]{11}$/.test(tid) || !title) return json({ error: 'none' }, 404);
-      if (await env.KV.get('lyr0:' + tid)) return json({ error: 'none' }, 404);        // recently not found
+      if (await env.KV.get('lyr1:' + tid)) return json({ error: 'none' }, 404);        // recently not found
       const hit = await lrclib(title, u.searchParams.get('artist') || '', +u.searchParams.get('dur') || 0);
-      if (!hit) { await env.KV.put('lyr0:' + tid, '1', { expirationTtl: 21600 }); return json({ error: 'none' }, 404); }
+      if (hit === 'error') return json({ error: 'unavailable' }, 502);                   // never remember a failure
+      if (!hit) { await env.KV.put('lyr1:' + tid, '1', { expirationTtl: 21600 }); return json({ error: 'none' }, 404); }
       const source = hit.synced ? 'lrclib-synced' : 'lrclib-plain';
       await env.DB.prepare(
         `INSERT INTO lyrics (track_id,lrc,source,uploaded_by) VALUES (?,?,?,?)

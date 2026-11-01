@@ -1,9 +1,14 @@
 // Lyrics from LRCLIB (free, no key). Synced lyrics come as an LRC text with [mm:ss.xx] stamps.
 const H = { 'user-agent': 'room-app/1.0 (private friends listening room)' };
-const clean = s => (s || '').replace(/\(.*?\)|\[.*?\]/g, ' ').replace(/\s+/g, ' ').trim();
+const tidy = s => (s || '')
+  .replace(/\(.*?\)|\[.*?\]/g, ' ')
+  .replace(/\s+-\s+(\d{4}\s+)?(remaster(ed)?|live|version|edit|mix|radio|single|bonus|mono|stereo|deluxe|acoustic|from)\b.*$/i, ' ')
+  .replace(/\b(feat|ft)\.?\s.*$/i, ' ')
+  .replace(/["\u201c\u201d]/g, '').replace(/\s+/g, ' ').trim();
 
 async function get(url) {
-  try { const r = await fetch(url, { headers: H }); return r.ok ? await r.json() : null; } catch { return null; }
+  try { const r = await fetch(url, { headers: H }); return r.ok ? { ok: true, data: await r.json() } : { ok: false }; }
+  catch { return { ok: false }; }
 }
 
 // best match from a LRCLIB search list: close in length, synced first
@@ -16,9 +21,16 @@ export function pickLyrics(list, dur) {
   return j.syncedLyrics ? { lrc: j.syncedLyrics, synced: true } : { lrc: j.plainLyrics, synced: false };
 }
 
+// -> { lrc, synced } | null (nothing found) | 'error' (the service could not be reached)
 export async function lrclib(title, artist, dur) {
-  const t = clean(title), a = clean(artist);
-  let hit = pickLyrics(await get('https://lrclib.net/api/search?' + new URLSearchParams({ track_name: t, artist_name: a })), dur);
-  if (!hit) hit = pickLyrics(await get('https://lrclib.net/api/search?' + new URLSearchParams({ q: `${t} ${a}`.trim() })), dur);
-  return hit;
+  const t = tidy(title), a = tidy(artist);
+  const tries = [{ track_name: t, artist_name: a }, { q: `${t} ${a}`.trim() }, { q: t }];
+  let failed = 0;
+  for (const q of tries) {
+    const r = await get('https://lrclib.net/api/search?' + new URLSearchParams(q));
+    if (!r.ok) { failed++; continue; }
+    const hit = pickLyrics(r.data, dur);
+    if (hit) return hit;
+  }
+  return failed === tries.length ? 'error' : null;
 }

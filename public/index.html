@@ -5,8 +5,6 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0c0d10">
 <link rel="manifest" href="/manifest.json">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
 <style>
   html{background:#0c0d10;color:#e9ebee;font:14px Inter,system-ui}
   body{margin:0;padding:env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 160px)}
@@ -73,7 +71,7 @@
   #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 20px);background:#e9ebee;color:#0c0d10;padding:8px 14px;border-radius:99px;z-index:20;max-width:90vw}
   #toast[hidden]{display:none}
   #webwrap{position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 10px);transition:right .2s}
-  #webwrap.min{right:-420px}                       /* hidden off-screen, still playing the audio */
+  #webwrap.min{opacity:0;pointer-events:none}        /* invisible but still on screen, so the browser keeps playing the audio */
 </style>
 
 <div id="login" hidden>
@@ -115,17 +113,18 @@
       <div class="stage">
         <div class="box">
           <div class="face front">
-            <div class="screen"><canvas id="vinyl" width="160" height="160"></canvas></div>
+            <div class="screen"><canvas id="vinyl" width="80" height="80"></canvas></div>
             <div class="led"></div>
           </div>
           <div class="face topf"></div>
           <div class="face rightf"></div>
         </div>
       </div>
+      <div id="lyrstat" class="s" style="text-align:center"></div>
       <div id="np"></div>
       <div id="ctl"></div>
       <div id="armbar"></div>
-      <button id="tap" class="btn" hidden style="width:100%;margin:6px 0">🔊 Tap to hear the song</button>
+      <button id="tap" class="btn" hidden style="width:100%;margin:6px 0">🔊 Tap here to turn the sound on</button>
     </div>
 
     <div class="tabsarea" data-tab="search">

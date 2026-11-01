@@ -24,6 +24,7 @@ final class Shell: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   var ui: WKWebView!
   var yt: WKWebView!
   var pendingSeek = 0.0
+  var muted = false
 
   override init() {
     super.init()
@@ -74,6 +75,9 @@ final class Shell: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         if let ms = d["arg"] as? Double { yt.evaluateJavaScript("window.bridge&&window.bridge.seek(\(ms))") }
       case "pause":
         yt.evaluateJavaScript("window.bridge&&window.bridge.pause()")
+      case "mute":
+        muted = (d["arg"] as? Bool) ?? false
+        yt.evaluateJavaScript("window.bridge&&window.bridge.mute(\(muted))")
       default: break
       }
     } else if m.name == "yt" {
@@ -88,6 +92,7 @@ final class Shell: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
   }
 
   func webView(_ w: WKWebView, didFinish n: WKNavigation!) {
+    if w === yt { w.evaluateJavaScript("window.__muted=\(muted)") }
     if w === yt && pendingSeek > 500 {
       let ms = pendingSeek; pendingSeek = 0
       DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -123,6 +128,7 @@ final class Shell: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     window.bridge = {
       play: function(){ var x=v(); x && x.play(); },
       pause: function(){ var x=v(); x && x.pause(); },
+      mute: function(m){ window.__muted = !!m; var x=v(); if(x) x.muted = !!m; },
       seek: function(ms){ var x=v(); if(x) x.currentTime = ms/1000; },
       position: function(){ var x=v(); return x ? x.currentTime*1000 : 0; },
       onEnd: function(cb){ var x=v(); x && x.addEventListener('ended', cb); },
@@ -131,6 +137,7 @@ final class Shell: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var hooked = null;
     setInterval(function(){
       var x = v(); if (!x) return;
+      if (x.muted !== !!window.__muted) x.muted = !!window.__muted;
       var ad = document.querySelector('.ad-showing') || document.querySelector('.ytp-ad-player-overlay');
       if (ad && x.duration > 1) {
         skipping = true; setTimeout(function(){ skipping = false; }, 1500);

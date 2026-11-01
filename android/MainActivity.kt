@@ -15,6 +15,7 @@ class MainActivity : AppCompatActivity() {
   private lateinit var ui: WebView
   private lateinit var yt: WebView
   private var pendingSeek = 0.0
+  private var muted = false
   private val roomHost = "room.example.workers.dev"          // <- your Worker's host
 
   @SuppressLint("SetJavaScriptEnabled")
@@ -49,6 +50,7 @@ class MainActivity : AppCompatActivity() {
       }
       override fun onPageFinished(v: WebView, url: String) {
         v.evaluateJavascript(AD_SKIP_JS, null)
+        v.evaluateJavascript("window.__muted=$muted", null)
         if (pendingSeek > 500) {
           val ms = pendingSeek; pendingSeek = 0.0
           v.postDelayed({ v.evaluateJavascript("window.bridge&&window.bridge.seek($ms)", null) }, 1500)
@@ -75,6 +77,9 @@ class MainActivity : AppCompatActivity() {
       runOnUiThread { pendingSeek = ms; yt.loadUrl("https://music.youtube.com/watch?v=$id") }
     }
     @JavascriptInterface fun pause() { PlaybackService.pause() }
+    @JavascriptInterface fun mute(m: Boolean) {
+      runOnUiThread { muted = m; yt.evaluateJavascript("window.bridge&&window.bridge.mute($m)", null) }
+    }
   }
 
   // called from the YouTube Music page (yt)
@@ -95,6 +100,7 @@ class MainActivity : AppCompatActivity() {
         window.bridge = {
           play: function(){ var x=v(); x && x.play(); },
           pause: function(){ var x=v(); x && x.pause(); },
+          mute: function(m){ window.__muted = !!m; var x=v(); if(x) x.muted = !!m; },
           seek: function(ms){ var x=v(); if(x) x.currentTime = ms/1000; },
           position: function(){ var x=v(); return x ? x.currentTime*1000 : 0; },
           onEnd: function(cb){ var x=v(); x && x.addEventListener('ended', cb); },
@@ -103,6 +109,7 @@ class MainActivity : AppCompatActivity() {
         var hooked = null;
         setInterval(function(){
           var x = v(); if (!x) return;
+          if (x.muted !== !!window.__muted) x.muted = !!window.__muted;
           var ad = document.querySelector('.ad-showing') || document.querySelector('.ytp-ad-player-overlay');
           if (ad && x.duration > 1) {
             skipping = true; setTimeout(function(){ skipping = false; }, 1500);

@@ -16,7 +16,7 @@ let S = fresh();
 let me, player, vinyl, loop, ws, ready = false, room = null;
 let wantArmed = true, beganSeq = -1, beginTimer, playToken = 0, lastDrift = 0, backoff = 1000, lastArm = 0;
 let status = '', routeNote = '', tab = 'search', lastItems = [], lastVinylTid = null;
-let showVid = store.get('vid') === '1', spinLyr = store.get('spin') === '1';
+let showVid = store.get('vid') === '1', spinLyr = store.get('spin') === '1', muted = store.get('mute') === '1';
 let pls = [], openPl = null, plFrom = 'lobby', renaming = false, delArmed = false, toastT;
 const lyrCache = new Map();
 
@@ -73,7 +73,8 @@ function sendToShell(name, arg) {
 
 // ---------- player: everyone plays through YouTube ----------
 const route = () => new URLSearchParams(location.search).has('manual') ? 'manual' : hasShell() ? 'ytm' : 'web';
-const applyVid = () => $('#webwrap').classList.toggle('min', !showVid);     // hidden = off-screen but still playing
+const applyVid = () => $('#webwrap').classList.toggle('min', !showVid);     // hidden = invisible but still playing
+function toggleMute() { muted = !muted; store.set('mute', muted ? '1' : '0'); Promise.resolve(player?.setMuted?.(muted)).catch(() => {}); render(); }
 
 async function pick() {
   const r = route();
@@ -88,6 +89,7 @@ async function pick() {
         : 'Playback error — try skipping')
     });
     routeNote = 'Keep this tab open and the screen on — the song plays here';
+    player.setMuted(muted);
   } else { player = manual(() => S, serverNow); routeNote = 'Press play in your own music app when the countdown ends'; }
   ready = true;
 }
@@ -135,7 +137,7 @@ function closeWS() { const w = ws; ws = null; if (w) { w.onclose = null; w.onmes
 function openRoom(r) {
   closeWS(); clearTimers();
   room = r; S = fresh(); beganSeq = -1; lastDrift = 0; wantArmed = true; status = ''; lastVinylTid = null;
-  vinyl.setTrack(null);
+  vinyl.setTrack(null); $('#lyrstat').textContent = '';
   history.replaceState(null, '', '#r=' + r.id);
   $('#rtitle').textContent = r.name;
   $('#rcodeline').textContent = 'Code ' + r.id;
@@ -199,6 +201,7 @@ async function begin() {
     if (token !== playToken) return;
     const late = Math.max(0, serverNow() - S.startAt);
     await player.play(t.yt_id || t.tid, late);
+    Promise.resolve(player.setMuted?.(muted)).catch(() => {});
     if (token !== playToken) return;
     loop = startLoop(player, () => S, paintDrift);
     player.end(t.dur * 1000).then(() => { if (token === playToken) send({ t: 'ended', seq }); });
@@ -223,12 +226,15 @@ function paintDrift(d) {
 
 // ---------- lyrics ----------
 async function loadLyrics(t) {
-  if (lyrCache.has(t.tid)) { vinyl.setLyrics(lyrCache.get(t.tid)); return; }
-  vinyl.setLyrics(null);
+  const say = (tid, msg) => { if (S.playing?.tid === tid) $('#lyrstat').textContent = msg; };
+  const label = l => !l ? '♪ No lyrics found for this song (the ring shows the title)' : l.synced ? '♪ Synced lyrics' : '♪ Lyrics (not timed, spread over the song)';
+  if (lyrCache.has(t.tid)) { const l = lyrCache.get(t.tid); vinyl.setLyrics(l); say(t.tid, label(l)); return; }
+  vinyl.setLyrics(null); say(t.tid, '♪ Loading lyrics…');
   const r = await api('lyrics?' + new URLSearchParams({ tid: t.tid, title: t.title, artist: t.artist || '', dur: String(t.dur) }));
+  if (r.error && r.error !== 'none') { say(t.tid, '♪ Lyrics service not reachable right now'); return; }   // not cached: tried again next time
   const parsed = r.lrc ? parseLrc(r.lrc) : null;
   lyrCache.set(t.tid, parsed);
-  if (S.playing?.tid === t.tid) vinyl.setLyrics(parsed);
+  if (S.playing?.tid === t.tid) { vinyl.setLyrics(parsed); say(t.tid, label(parsed)); }
 }
 
 // ---------- room UI ----------
@@ -271,6 +277,7 @@ function render() {
     h('button', { class: 'btn', title: 'Previous (vote)', onclick: () => send({ t: 'prev' }) }, '⏮'),
     h('button', { class: 'btn', disabled: !S.playing, title: S.paused ? 'Resume' : 'Pause', onclick: () => send({ t: S.paused ? 'resume' : 'pause' }) }, S.paused ? '▶' : '⏸'),
     h('button', { class: 'btn', disabled: !S.playing, title: 'Skip (vote)', onclick: () => send({ t: 'skip' }) }, '⏭'),
+    h('button', { class: 'btn', title: muted ? 'Unmute' : 'Mute (only for you)', onclick: toggleMute }, muted ? '🔇' : '🔊'),
     h('button', { class: 'btn ghost small', title: 'Lyrics turn with the record', onclick: () => { spinLyr = !spinLyr; store.set('spin', spinLyr ? '1' : '0'); render(); } }, spinLyr ? '↻ Lyrics spin: on' : '↻ Lyrics spin: off'),
     route() === 'web' && h('button', { class: 'btn ghost small', onclick: () => { showVid = !showVid; store.set('vid', showVid ? '1' : '0'); applyVid(); render(); } }, showVid ? '📺 Hide video' : '📺 Show video'),
     votes && h('div', { class: 's' }, votes)
