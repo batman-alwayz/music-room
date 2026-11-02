@@ -183,11 +183,16 @@ export class Room {
       }
       case 'live': s.present[who].live = !!b.v; break;      // client says its player is really playing
       case 'late': if (s.playing) s.part[who] = true; break; // "join this song now"
-      case 'seek': {                                        // admin resync of the whole room
-        if (!s.playing || !this.admin(who)) break;
-        s.startAt = Date.now() - Math.max(0, Number(b.ms) || 0);
-        s.endAt = s.startAt + s.playing.dur * 1000 + 2500;
-        if (!s.paused) this.state.storage.setAlarm(s.endAt);
+      case 'seek': {                                        // the sound bar: jump the whole room to a moment
+        if (!s.playing || Date.now() < s.goAt) break;       // not during the countdown
+        const ms = Math.max(0, Math.min(Number(b.ms) || 0, s.playing.dur * 1000 - 1500));
+        if (s.paused) s.pos = ms;
+        else {
+          s.startAt = Date.now() - ms;
+          s.endAt = s.startAt + s.playing.dur * 1000 + 2500;
+          this.state.storage.setAlarm(s.endAt);
+        }
+        s.ended = {};
         break;
       }
       case 'progress':

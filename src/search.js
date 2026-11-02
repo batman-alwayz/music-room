@@ -52,6 +52,44 @@ async function webSearch(q) {
   } catch { return []; }
 }
 
+
+// ---------- keyless: YouTube Music's SONG search (official tracks only) ----------
+const MCTX = { client: { clientName: 'WEB_REMIX', clientVersion: '1.20260101.01.00', hl: 'en', gl: 'US' } };
+const MHDR = { ...HDR, origin: 'https://music.youtube.com' };
+const rt = o => (o?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []).map(x => x.text);
+
+export function parseMusic(j) {
+  const out = [];
+  const tabs = j?.contents?.tabbedSearchResultsRenderer?.tabs || [];
+  const sections = tabs[0]?.tabRenderer?.content?.sectionListRenderer?.contents || [];
+  for (const sec of sections) {
+    for (const c of sec.musicShelfRenderer?.contents || []) {
+      const r = c.musicResponsiveListItemRenderer;
+      if (!r) continue;
+      const id = r.playlistItemData?.videoId ||
+        r.overlay?.musicItemThumbnailOverlayRenderer?.content?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
+      const title = rt(r.flexColumns?.[0])[0];
+      const runs = rt(r.flexColumns?.[1]).map(t => t.trim()).filter(t => t && t !== '•');
+      const durText = runs.find(t => /^\d+:\d{2}(:\d{2})?$/.test(t));
+      const dur = hms(durText);
+      if (!id || !title || !okDur(dur)) continue;
+      const artist = runs.filter(t => t !== durText && t !== 'Song')[0] || '';
+      out.push({ tid: id, title, artist, dur, cover: thumb(id) });
+    }
+  }
+  return out;
+}
+
+export async function musicSearch(q) {
+  try {
+    const r = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
+      method: 'POST', headers: MHDR,
+      body: JSON.stringify({ context: MCTX, query: q, params: 'EgWKAQIIAWoMEA4QChADEAQQCRAF' })   // "Songs" filter
+    });
+    return r.ok ? parseMusic(await r.json().catch(() => null)) : [];
+  } catch { return []; }
+}
+
 // a pasted link: find that exact video; fall back to reading its watch page
 async function webLookup(id) {
   const hit = (await webSearch(id)).find(t => t.tid === id);
@@ -88,7 +126,9 @@ async function apiSearch(q, env) {
 // ---------- what the Worker calls ----------
 export async function ytSearch(q, env) {
   const r = env.YT_API_KEY ? await apiSearch(q, env).catch(() => []) : [];
-  return r.length ? r : webSearch(q);
+  if (r.length) return r;
+  const songs = await musicSearch(q);          // official songs first
+  return songs.length ? songs : webSearch(q);  // fall back to plain YouTube videos
 }
 export async function ytLookup(id, env) {
   const r = env.YT_API_KEY ? await apiDetails([id], env).catch(() => []) : [];

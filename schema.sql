@@ -16,3 +16,7 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
   playlist TEXT, tid TEXT, title TEXT, artist TEXT, dur INTEGER, cover TEXT, pos INTEGER,
   PRIMARY KEY (playlist, tid)
 );
+CREATE TABLE IF NOT EXISTS links (
+  member TEXT, provider TEXT, access TEXT, refresh TEXT, exp INTEGER, ext_id TEXT, name TEXT, product TEXT,
+  PRIMARY KEY (member, provider)
+);

@@ -4,6 +4,7 @@ import { rooms, isMember } from './rooms.js';
 import { playlists } from './playlists.js';
 import { ytSearch, ytLookup, linkId } from './search.js';
 import { lrclib } from './lyrics.js';
+import { spLogin, spCallback, spotifyApi } from './spotify.js';
 export { Room };
 
 const json = (d, s = 200) => new Response(JSON.stringify(d), {
@@ -23,6 +24,11 @@ async function route(req, env) {
 
     if (p === '/auth/join') return join(req, env);
     if (p === '/auth/logout') return logout(req, env);
+    if (p === '/auth/spotify/callback') return spCallback(req, env);
+    if (p === '/auth/spotify/login') {
+      const who = await whoami(req, env);
+      return who ? spLogin(req, env, who) : new Response(null, { status: 302, headers: { location: new URL('/', req.url).href } });
+    }
 
     if (!p.startsWith('/api/')) return env.ASSETS.fetch(req);   // static files need no DB hit
 
@@ -47,7 +53,9 @@ async function route(req, env) {
     if (p === '/api/cover') {
       const id = u.searchParams.get('id') || '';
       if (!/^[\w-]{11}$/.test(id)) return json({ error: 'bad' }, 400);
-      const r = await fetch(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`, { cf: { cacheTtl: 86400, cacheEverything: true } });
+      const cf = { cacheTtl: 86400, cacheEverything: true };
+      let r = await fetch(`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`, { cf });          // sharpest version first
+      if (!r.ok) r = await fetch(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`, { cf });
       if (!r.ok) return json({ error: 'nf' }, 404);
       return new Response(r.body, { headers: { 'content-type': r.headers.get('content-type') || 'image/jpeg', 'cache-control': 'private, max-age=86400' } });
     }
@@ -55,7 +63,7 @@ async function route(req, env) {
     if (p === '/api/lyrics') {
       if (req.method === 'POST') {
         const b = await req.json();
-        if (!b.tid || !b.lrc) return json({ error: 'bad' }, 400);
+        if (!/^[\w-]{11}$/.test(b.tid || '') || !b.lrc || String(b.lrc).length > 30000) return json({ error: 'bad' }, 400);
         await env.DB.prepare(
           `INSERT INTO lyrics (track_id,lrc,source,uploaded_by) VALUES (?,?,?,?)
            ON CONFLICT(track_id) DO UPDATE SET lrc=excluded.lrc, source=excluded.source, uploaded_by=excluded.uploaded_by`
@@ -81,6 +89,7 @@ async function route(req, env) {
 
     if (p.startsWith('/api/rooms')) return rooms(req, env, me, p);
     if (p.startsWith('/api/playlists')) return playlists(req, env, me, p);
+    if (p.startsWith('/api/spotify')) return spotifyApi(req, env, me, p);
 
     // everything else talks to one room's Durable Object (you must have joined that room)
     const roomId = (u.searchParams.get('room') || '').toUpperCase();

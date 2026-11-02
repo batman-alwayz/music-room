@@ -21,16 +21,25 @@ export function pickLyrics(list, dur) {
   return j.syncedLyrics ? { lrc: j.syncedLyrics, synced: true } : { lrc: j.plainLyrics, synced: false };
 }
 
-// -> { lrc, synced } | null (nothing found) | 'error' (the service could not be reached)
+const firstArtist = a => (a || '').split(/,|&|\bx\b|\bfeat\b|\bft\b|\band\b/i)[0].trim();
+
+// -> { lrc, synced } | null (nothing found) | 'error' (the services could not be reached)
 export async function lrclib(title, artist, dur) {
-  const t = tidy(title), a = tidy(artist);
-  const tries = [{ track_name: t, artist_name: a }, { q: `${t} ${a}`.trim() }, { q: t }];
+  const t = tidy(title), a = tidy(artist), a1 = firstArtist(a);
+  const seen = new Set();
+  const tries = [{ track_name: t, artist_name: a }, { track_name: t, artist_name: a1 }, { q: `${t} ${a}`.trim() }, { q: t }]
+    .filter(q => { const k = JSON.stringify(q); if (seen.has(k)) return false; seen.add(k); return true; });
   let failed = 0;
   for (const q of tries) {
     const r = await get('https://lrclib.net/api/search?' + new URLSearchParams(q));
     if (!r.ok) { failed++; continue; }
     const hit = pickLyrics(r.data, dur);
     if (hit) return hit;
+  }
+  // second free source (plain text, not timed)
+  if (t && a1) {
+    const o = await get(`https://api.lyrics.ovh/v1/${encodeURIComponent(a1)}/${encodeURIComponent(t)}`);
+    if (o.ok && typeof o.data?.lyrics === 'string' && o.data.lyrics.trim().length > 20) return { lrc: o.data.lyrics.trim(), synced: false };
   }
   return failed === tries.length ? 'error' : null;
 }

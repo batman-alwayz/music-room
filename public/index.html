@@ -24,12 +24,13 @@
   .tabbtn{background:#14161a;color:#8b9099;border:0;border-radius:99px;padding:8px 14px;font:inherit;cursor:pointer}
   .tabbtn.on{background:#e9ebee;color:#0c0d10}
   .tabpanel{display:none}
-  .tabsarea[data-tab="search"] #tab-search,.tabsarea[data-tab="queue"] #tab-queue,.tabsarea[data-tab="pls"] #tab-pls{display:block}
+  .tabsarea[data-tab="search"] #tab-search,.tabsarea[data-tab="queue"] #tab-queue,.tabsarea[data-tab="pls"] #tab-pls,.tabsarea[data-tab="lyrics"] #tab-lyrics{display:block}
   @media (min-width:1050px){
     .main{grid-template-columns:minmax(380px,460px) 1fr}
+    body.bigdisc .main{grid-template-columns:minmax(640px,680px) 1fr}
     .tabsarea{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
     .tabbar{grid-column:1}
-    #tab-search,#tab-pls{grid-column:1}
+    #tab-search,#tab-pls,#tab-lyrics{grid-column:1}
     #tab-queue{display:block !important;grid-column:2;grid-row:1 / span 3}
     .tabbtn[data-tab="queue"]{display:none}
   }
@@ -37,7 +38,7 @@
   /* ---- the golden cuboid with an OLED screen ---- */
   .stage{perspective:1300px;display:flex;justify-content:center;padding:30px 0 32px;position:relative}
   .stage::after{content:"";position:absolute;left:14%;right:14%;bottom:8px;height:22px;background:radial-gradient(#000a,transparent 70%);filter:blur(7px)}
-  .box{--d:30px;position:relative;width:min(94vw,420px);transform-style:preserve-3d;
+  .box{--d:30px;position:relative;width:min(94vw,340px);transform-style:preserve-3d;transition:width .25s;
        transform:rotateX(-10deg) rotateY(-15deg);animation:sway 9s ease-in-out infinite alternate}
   @keyframes sway{from{transform:rotateX(-10deg) rotateY(-17deg)}to{transform:rotateX(-8deg) rotateY(-11deg)}}
   @keyframes sway-s{from{transform:rotateX(-7deg) rotateY(-9deg)}to{transform:rotateX(-6deg) rotateY(-5deg)}}
@@ -55,9 +56,27 @@
     box-shadow:inset 0 0 26px #000,0 0 0 2px #5b3d0c,0 0 0 4px #ffe9a866}
   .screen::after{content:"";position:absolute;inset:0;border-radius:12px;pointer-events:none;
     background:linear-gradient(120deg,#ffffff18 0%,#ffffff06 30%,transparent 42%)}
-  #vinyl{image-rendering:pixelated;display:block;filter:drop-shadow(0 0 3px #38d4ff88)}
+  #vinyl,#vinylhi{grid-area:1/1;display:block}
+  #vinyl{image-rendering:pixelated}
+  #vinylhi{pointer-events:none;filter:drop-shadow(0 0 2px #38d4ff55)}
+  .screen{cursor:zoom-in}
+  body.bigdisc .box{width:min(94vw,600px)}
+  body.bigdisc .screen{cursor:zoom-out}
   .led{position:absolute;right:22px;bottom:4px;width:6px;height:6px;border-radius:50%;background:#7dfaff;box-shadow:0 0 8px #7dfaff}
 
+  @media (max-width:700px){                          /* phone: the record is as big as the screen, controls right under it */
+    body{padding-left:8px;padding-right:8px}
+    .stage{padding:18px 0 22px}.box{width:100% !important}.front{padding:8px}.screen{padding:4px;cursor:default}
+  }
+  #seekrow{display:flex;gap:8px;align-items:center;padding:4px 2px}
+  #seekrow span{font-size:12px;color:#8b9099;min-width:36px;text-align:center}
+  input[type=range]{padding:0;border:0;background:transparent;margin:0;accent-color:#5ff3ff;cursor:pointer}
+  input[type=range]:disabled{opacity:.4;cursor:default}
+  input[type=checkbox]{width:auto;margin:0 6px 0 0}
+  textarea{width:100%;box-sizing:border-box;min-height:120px;background:#14161a;color:inherit;border:1px solid #1a1d22;border-radius:9px;padding:10px;font:inherit;margin:6px 0}
+  #lyrlist{position:relative;max-height:58vh;overflow:auto;padding:6px 2px}
+  .lyrline{padding:7px 0;color:#6b7280;font-size:16px;line-height:1.35;transition:color .2s,font-size .2s}
+  .lyrline.on{color:#8ffcff;font-size:21px;font-weight:600}
   #np{padding:4px 0;text-align:center}
   #ctl{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;padding:6px 0}
   #ctl .btn{font-size:18px;min-width:48px}
@@ -113,13 +132,14 @@
       <div class="stage">
         <div class="box">
           <div class="face front">
-            <div class="screen"><canvas id="vinyl" width="80" height="80"></canvas></div>
+            <div class="screen" id="screen" title="Click the record to make it bigger (laptop)"><canvas id="vinyl" width="80" height="80"></canvas><canvas id="vinylhi"></canvas></div>
             <div class="led"></div>
           </div>
           <div class="face topf"></div>
           <div class="face rightf"></div>
         </div>
       </div>
+      <div id="seekrow"><span id="tcur">0:00</span><input id="seek" type="range" min="0" max="1000" value="0" step="1" disabled style="flex:1"><span id="tdur">0:00</span></div>
       <div id="lyrstat" class="s" style="text-align:center"></div>
       <div id="np"></div>
       <div id="ctl"></div>
@@ -131,6 +151,7 @@
       <div class="tabbar">
         <button class="tabbtn on" data-tab="search">Search</button>
         <button class="tabbtn" data-tab="queue" id="qtab">Queue</button>
+        <button class="tabbtn" data-tab="lyrics">Lyrics</button>
         <button class="tabbtn" data-tab="pls">Playlists</button>
       </div>
 
@@ -143,6 +164,20 @@
       <div id="tab-queue" class="tabpanel">
         <div class="s" style="margin:4px 0">Up next</div>
         <div id="queue"></div>
+      </div>
+
+      <div id="tab-lyrics" class="tabpanel">
+        <div id="lyrctl" class="row" hidden style="border:0;gap:6px;flex-wrap:wrap">
+          <span id="lyrinfo" class="s" style="flex:1"></span>
+          <button id="lyrm" class="btn ghost small">Lyrics later</button>
+          <button id="lyrp" class="btn ghost small">Lyrics earlier</button>
+        </div>
+        <div id="lyrlist"></div>
+        <div id="lyrpaste" class="card" hidden>
+          <div class="s">No lyrics found for this song. Paste them here (plain text or with [mm:ss.xx] timing) and everyone gets them.</div>
+          <textarea id="lyrta" placeholder="Paste lyrics…"></textarea>
+          <button id="lyrsave" class="btn">Save lyrics for everyone</button>
+        </div>
       </div>
 
       <div id="tab-pls" class="tabpanel">
@@ -168,6 +203,16 @@
         <div id="plerr" class="s err"></div>
       </div>
       <div id="pllist"></div>
+      <div class="card" id="spcard">
+        <div class="t" style="font-size:16px">Spotify</div>
+        <div id="spstat" class="s"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <a id="spconnect" class="btn" href="/auth/spotify/login" hidden>Connect Spotify</a>
+          <button id="spdisc" class="btn ghost" hidden>Disconnect</button>
+        </div>
+        <label id="spplayrow" class="s" hidden style="display:block;margin-top:8px"><input type="checkbox" id="spplay">Play songs through my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
+        <div id="splist"></div>
+      </div>
     </div>
     <div id="pldetail" hidden>
       <div class="top"><button id="pldback" class="btn ghost">←</button><div id="pltitle" class="t" style="flex:1"></div></div>
