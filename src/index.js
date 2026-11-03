@@ -5,6 +5,7 @@ import { playlists } from './playlists.js';
 import { ytSearch, ytLookup, linkId } from './search.js';
 import { lrclib } from './lyrics.js';
 import { spLogin, spCallback, spotifyApi } from './spotify.js';
+import { ggLogin, ggCallback, googleApi } from './google.js';
 export { Room };
 
 const json = (d, s = 200) => new Response(JSON.stringify(d), {
@@ -25,6 +26,11 @@ async function route(req, env) {
     if (p === '/auth/join') return join(req, env);
     if (p === '/auth/logout') return logout(req, env);
     if (p === '/auth/spotify/callback') return spCallback(req, env);
+    if (p === '/auth/google/callback') return ggCallback(req, env);
+    if (p === '/auth/google/login') {
+      const who = await whoami(req, env);
+      return who ? ggLogin(req, env, who) : new Response(null, { status: 302, headers: { location: new URL('/', req.url).href } });
+    }
     if (p === '/auth/spotify/login') {
       const who = await whoami(req, env);
       return who ? spLogin(req, env, who) : new Response(null, { status: 302, headers: { location: new URL('/', req.url).href } });
@@ -90,6 +96,7 @@ async function route(req, env) {
     if (p.startsWith('/api/rooms')) return rooms(req, env, me, p);
     if (p.startsWith('/api/playlists')) return playlists(req, env, me, p);
     if (p.startsWith('/api/spotify')) return spotifyApi(req, env, me, p);
+    if (p.startsWith('/api/google')) return googleApi(req, env, me, p);
 
     // everything else talks to one room's Durable Object (you must have joined that room)
     const roomId = (u.searchParams.get('room') || '').toUpperCase();

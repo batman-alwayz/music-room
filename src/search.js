@@ -2,7 +2,7 @@
 // If you ever add a YT_API_KEY secret, the official API is used first and this is the fallback.
 const API = 'https://www.googleapis.com/youtube/v3/';
 const ISO = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/;
-const isoSecs = s => {
+export const isoSecs = s => {
   const m = ISO.exec(s || '');
   return m ? (+(m[1] || 0)) * 3600 + (+(m[2] || 0)) * 60 + (+(m[3] || 0)) : 0;
 };

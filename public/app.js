@@ -17,6 +17,8 @@ let S = fresh();
 let me, player, yt, spot = null, spApiObj = null, vinyl, loop, ws, ready = false, room = null;
 let spLink = { connected: false, hasId: false }, spTok = null, spExp = 0, warnedSp = false;
 let curLyr = null, lastLyrI = -1, seekDrag = false;
+let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = '';
+const roomSpUris = new Set();
 let wantArmed = true, beganSeq = -1, beginTimer, playToken = 0, lastDrift = 0, backoff = 1000, lastArm = 0;
 let status = '', routeNote = '', tab = 'search', lastItems = [], lastVinylTid = null;
 let showVid = store.get('vid') === '1', spinLyr = store.get('spin') === '1', muted = store.get('mute') === '1';
@@ -47,7 +49,9 @@ async function api(path, body) {
 }
 // turn a failed API answer into something a person can act on
 const explain = (r, fallback) =>
-  r.error === 'spotify' ? (r.status === 403 || r.status === 401 ? 'Spotify refused: reconnect, and check this account is on your Spotify app’s user list' : 'Spotify did not answer — try again')
+  r.error === 'google' ? (r.status === 403 || r.status === 401 ? 'Google refused: reconnect YT Music (while the Google app is in test mode, the sign-in lasts 7 days)' : 'Google did not answer — try again')
+  : r.error === 'blocked' ? 'You are blocked from this room by its admin'
+  : r.error === 'spotify' ? (r.status === 403 || r.status === 401 ? 'Spotify refused: reconnect, and check this account is on your Spotify app’s user list' : 'Spotify did not answer — try again')
   :
   /no such table/i.test(r.detail || '') ? 'The database is missing its newest tables — run schema.sql once (see the update steps)'
   : r.error === 'limit' ? 'Limit reached'
@@ -55,7 +59,7 @@ const explain = (r, fallback) =>
   : r.detail ? `${fallback}: ${r.detail}` : fallback;
 
 function show(name) {
-  for (const id of ['login', 'lobby', 'room', 'pls']) $('#' + id).hidden = id !== name;
+  for (const id of ['login', 'connect', 'lobby', 'room', 'pls']) $('#' + id).hidden = id !== name;
   $('#webwrap').style.visibility = name === 'room' ? 'visible' : 'hidden';
   if (vinyl) { if (name === 'room') vinyl.start(); else vinyl.stop(); }
 }
@@ -132,7 +136,7 @@ async function joinCode(code) {
   if (r.error) {
     history.replaceState(null, '', location.pathname);
     show('lobby'); loadLobby();
-    $('#lerr').textContent = r.error === 'none' ? 'No room with that code' : explain(r, 'Could not join');
+    $('#lerr').textContent = r.error === 'none' ? 'No room with that code' : explain(r, 'Could not join');   // explain() knows "blocked"
     return;
   }
   openRoom(r);
@@ -153,20 +157,30 @@ function openRoom(r) {
   show('room'); render(); connectWS();
 }
 function leaveRoom() {
+  clearInterval(peopleTimer);
   closeWS(); clearTimers();
   pauseAll();
   room = null; S = fresh();
   history.replaceState(null, '', location.pathname);
   show('lobby'); loadLobby();
 }
+function removed() { toast('You were removed from that room'); leaveRoom(); }
+
 function connectWS() {
-  const mine = room;
+  const mine = room; let opened = false;
   const w = new WebSocket(location.origin.replace(/^http/, 'ws') + '/api/ws?room=' + mine.id);
   ws = w;
-  w.onopen = () => { backoff = 1000; send({ t: 'join' }); };
+  w.onopen = () => { opened = true; fails = 0; backoff = 1000; send({ t: 'join' }); };
   w.onmessage = e => { if (room === mine) onFrame(JSON.parse(e.data)); };
-  w.onclose = () => {
-    if (room === mine) setTimeout(() => { if (room === mine) connectWS(); }, (backoff = Math.min(backoff * 2, 15000)));
+  w.onclose = async e => {
+    if (room !== mine) return;
+    if (e.code === 4003) return removed();                    // the admin kicked or blocked me
+    if (!opened && ++fails >= 2) {                            // can't get in: am I still a member?
+      const r = await api('rooms');
+      if (room !== mine) return;
+      if (!(r.items || []).some(x => x.id === mine.id)) return removed();
+    }
+    setTimeout(() => { if (room === mine) connectWS(); }, (backoff = Math.min(backoff * 2, 15000)));
   };
 }
 
@@ -229,7 +243,7 @@ async function begin() {
       player = p = yt; await yt.play(t.yt_id || t.tid, late);
     }
     Promise.resolve(p.setMuted?.(muted)).catch(() => {});
-    if (p === spot) send({ t: 'live', v: true });
+    if (p === spot) { send({ t: 'live', v: true }); roomSpUris.add(id); }
     if (token !== playToken) return;
     loop = startLoop(p, () => S, paintDrift);
     p.end(t.dur * 1000).then(() => { if (token === playToken) send({ t: 'ended', seq }); });
@@ -306,8 +320,8 @@ function tickSeek() {
 }
 setInterval(() => { if (!room || !me) return; tickSeek(); tickLyrics(); }, 250);
 
-// ---------- Spotify ----------
-const spOn = () => spLink.connected && store.get('spplay') === '1';
+// ---------- Accounts: Spotify + YouTube Music (Google) ----------
+const spOn = () => spLink.connected && store.get('spplay') !== '0';       // on by default once connected
 async function getSpToken(force) {
   if (!force && spTok && Date.now() < spExp - 60000) return spTok;
   const r = await api('spotify/token' + (force ? '?force=1' : ''));
@@ -315,43 +329,173 @@ async function getSpToken(force) {
   spTok = r.token; spExp = r.exp; return spTok;
 }
 function setupSpot() { if (!spot) { spApiObj = spApi(getSpToken); spot = spConnect(spApiObj); } }
-async function loadSpStatus() {
-  const r = await api('spotify/status');
-  spLink = r.error ? { connected: false, hasId: false } : r;
-  if (spOn()) setupSpot();
-  renderSp();
+const bad = { connected: false, hasId: false, idOk: false };
+async function loadSpStatus() { const r = await api('spotify/status'); spLink = r.error ? bad : r; if (spLink.connected) setupSpot(); }
+async function loadGgStatus() { const r = await api('google/status'); ggLink = r.error ? bad : r; }
+async function loadLinks() {
+  await Promise.all([loadSpStatus(), loadGgStatus()]);
+  renderAccts(); renderConnect(); renderSp(); renderGg();
 }
-async function renderSp() {
+const setupNote = (name, L) => !L.hasId ? `${name} is not set up on the server yet (the owner adds its keys).`
+  : !L.idOk ? `The ${name} ID saved on the server does not look right — the owner should save it again.` : '';
+
+function connectClick(e, prov) {                              // buttons are links; stop them when the provider is not ready
+  const L = prov === 'spotify' ? spLink : ggLink, name = prov === 'spotify' ? 'Spotify' : 'YT Music';
+  const note = setupNote(name, L);
+  if (note) { e.preventDefault(); toast(note); return; }
+  if (L.connected && ['cSpotify', 'cGoogle'].includes(e.currentTarget.id)) { e.preventDefault(); goLobby(); }
+}
+
+function renderConnect() {
+  $('#cSpotify').textContent = spLink.connected ? `✓ Spotify connected${spLink.name ? ' — ' + spLink.name : ''}` : 'Connect Spotify';
+  $('#cGoogle').textContent = ggLink.connected ? `✓ YT Music connected${ggLink.name ? ' — ' + ggLink.name : ''}` : 'Connect YT Music';
+  $('#cSpotifyNote').textContent = setupNote('Spotify', spLink);
+  $('#cGoogleNote').textContent = setupNote('YT Music', ggLink);
+  $('#cContinue').hidden = !(spLink.connected || ggLink.connected);
+}
+function renderAccts() {
+  const box = $('#accts'); if (!box) return; box.replaceChildren();
+  const chip = (name, L, href) => L.connected ? h('span', { class: 'chip ok' }, `${name} ✓ ${L.name || ''}`)
+    : h('a', { class: 'chip', href, onclick: e => { const n = setupNote(name, L); if (n) { e.preventDefault(); toast(n); } } }, `Connect ${name}`);
+  box.append(chip('Spotify', spLink, '/auth/spotify/login'), chip('YT Music', ggLink, '/auth/google/login'));
+  if (spLink.connected || ggLink.connected) box.append(h('button', { class: 'chip', onclick: () => syncAll() }, '⟳ Sync my playlists'));
+}
+function goLobby() { show('lobby'); loadLobby(); renderAccts(); }
+function startScreen() {                                      // the first page: connect, or straight to the rooms
+  if (spLink.connected || ggLink.connected || store.get('guest') === '1') goLobby();
+  else { show('connect'); renderConnect(); }
+}
+
+async function renderSp() {                                   // the Spotify card on the Playlists screen
   const list = $('#splist'); if (!list) return;
   list.replaceChildren();
-  $('#spconnect').hidden = !spLink.hasId || spLink.connected;
+  $('#spconnect').hidden = spLink.connected || !spLink.hasId || !spLink.idOk;
   $('#spdisc').hidden = !spLink.connected;
   $('#spplayrow').hidden = !spLink.connected;
-  $('#spplay').checked = store.get('spplay') === '1';
-  $('#spstat').textContent = !spLink.hasId ? 'Spotify is not set up on this server yet (the owner adds a Spotify app Client ID).'
-    : spLink.connected ? `Connected as ${spLink.name}`
-    : 'Not connected. Spotify’s own login page lets you continue with Google, Facebook or Apple.';
-  if (!spLink.connected) return;
+  $('#spsharerow').hidden = !spLink.connected;
+  $('#spplay').checked = store.get('spplay') !== '0';
+  $('#spshare').checked = store.get('spshare') === '1';
+  $('#spstat').textContent = setupNote('Spotify', spLink)
+    || (spLink.connected ? `Connected as ${spLink.name}` : 'Not connected. Spotify’s own login page lets you continue with Google, Facebook or Apple.');
+  if (!spLink.connected || $('#pls').hidden) return;
   const r = await api('spotify/playlists');
   if (r.error) { list.append(h('div', { class: 's err' }, explain(r, 'Could not load your Spotify playlists'))); return; }
-  list.append(h('div', { class: 's', style: 'margin-top:10px' }, 'Import into this app (your own playlists and Liked songs):'));
+  list.append(h('div', { class: 's', style: 'margin-top:10px' }, 'Import (your own playlists and Liked songs):'));
   for (const p of r.items || []) {
-    const btn = h('button', { class: 'btn', onclick: () => importSp(p, btn) }, 'Import');
-    list.append(h('div', { class: 'row' },
-      h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name), h('div', { class: 's' }, `${p.n} song${p.n === 1 ? '' : 's'}`)), btn));
+    const btn = h('button', { class: 'btn', onclick: () => importOne2('spotify', p, btn) }, 'Import');
+    list.append(h('div', { class: 'row' }, h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name), h('div', { class: 's' }, `${p.n} song${p.n === 1 ? '' : 's'}`)), btn));
   }
 }
-async function importSp(p, btn) {                            // the server does 12 songs per call; keep asking until done
-  btn.disabled = true;
-  let offset = 0, target = '', added = 0, skipped = 0;
-  for (;;) {
-    const r = await api('spotify/import', { id: p.id, name: p.name, offset, target });
-    if (r.error) { toast(explain(r, 'Import stopped')); break; }
-    target = r.target; added += r.added; skipped += r.skipped; offset = r.next;
-    btn.textContent = `${Math.min(offset, r.total || offset)}/${r.total || '?'}`;
-    if (r.done) { toast(`Imported ${added} song${added === 1 ? '' : 's'}${skipped ? ` — ${skipped} not found on YouTube Music` : ''}`); break; }
+async function renderGg() {                                   // the YouTube Music card
+  const list = $('#gglist'); if (!list) return;
+  list.replaceChildren();
+  $('#ggconnect').hidden = ggLink.connected || !ggLink.hasId || !ggLink.idOk;
+  $('#ggdisc').hidden = !ggLink.connected;
+  $('#ggstat').textContent = setupNote('YT Music', ggLink)
+    || (ggLink.connected ? `Connected as ${ggLink.name}` : 'Not connected. Sign in with your Google account to bring over the playlists you made in YouTube Music or YouTube.');
+  if (!ggLink.connected || $('#pls').hidden) return;
+  const r = await api('google/playlists');
+  if (r.error) { list.append(h('div', { class: 's err' }, explain(r, 'Could not load your playlists'))); return; }
+  list.append(h('div', { class: 's', style: 'margin-top:10px' }, 'Import:'));
+  for (const p of r.items || []) {
+    const btn = h('button', { class: 'btn', onclick: () => importOne2('google', p, btn) }, 'Import');
+    list.append(h('div', { class: 'row' }, h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name), h('div', { class: 's' }, `${p.n} song${p.n === 1 ? '' : 's'}`)), btn));
   }
+}
+
+// one playlist, in small batches (Spotify: by offset, Google: by page token) until the server says done
+async function importOne(prov, p, progress) {
+  let added = 0, skipped = 0, target = '', cursor = prov === 'spotify' ? 0 : '';
+  for (;;) {
+    const body = prov === 'spotify' ? { id: p.id, name: p.name, offset: cursor, target } : { id: p.id, name: p.name, page: cursor, target };
+    const r = await api(`${prov}/import`, body);
+    if (r.error) { toast(explain(r, 'Import stopped')); return { added, skipped, error: true }; }
+    target = r.target; added += r.added; skipped += r.skipped; cursor = r.next;
+    progress?.(added + skipped);
+    if (r.done) return { added, skipped };
+  }
+}
+async function importOne2(prov, p, btn) {                     // the Import button next to one playlist
+  btn.disabled = true;
+  const r = await importOne(prov, p, n => { btn.textContent = `${n}…`; });
+  if (!r.error) toast(`Imported ${r.added} song${r.added === 1 ? '' : 's'}${r.skipped ? ` — ${r.skipped} not found` : ''}`);
   btn.disabled = false; btn.textContent = 'Import again'; loadPls();
+}
+
+// everything at once: right after connecting, and from "Sync my playlists"
+async function syncAll(which) {
+  if (syncing) { toast('Already syncing…'); return; }
+  syncing = true;
+  const bar = $('#syncbar'); bar.hidden = false;
+  const say = t => { bar.textContent = t; };
+  let added = 0, skipped = 0;
+  try {
+    for (const prov of which ? [which] : [spLink.connected && 'spotify', ggLink.connected && 'google'].filter(Boolean)) {
+      const label = prov === 'spotify' ? 'Spotify' : 'YT Music';
+      say(`Reading your ${label} playlists…`);
+      const lr = await api(`${prov}/playlists`);
+      if (lr.error) { say(explain(lr, `Could not read your ${label} playlists`)); continue; }
+      const lists = (lr.items || []).filter(p => p.n > 0).slice(0, 25);
+      let i = 0;
+      for (const p of lists) {
+        i++;
+        const r = await importOne(prov, p, n => say(`Syncing ${label}: playlist ${i}/${lists.length} “${p.name}” — ${n} songs`));
+        added += r.added; skipped += r.skipped;
+        if (r.error) break;
+      }
+    }
+    say(`Synced ${added} song${added === 1 ? '' : 's'} into your playlists${skipped ? ` (${skipped} not found)` : ''}. Open “My playlists” to see them.`);
+  } finally {
+    syncing = false;
+    setTimeout(() => { if (!syncing) bar.hidden = true; }, 9000);
+  }
+}
+
+// the other direction: what you play on Spotify lands in the room's queue (only if you switch it on)
+async function pollSpotifyNow() {
+  if (!room || !spLink.connected || store.get('spshare') !== '1' || !spApiObj) return;
+  const r = await spApiObj.get('/me/player/currently-playing');
+  const it = r?.item;
+  if (!it || !r.is_playing || it.type === 'episode' || it.id === lastShared) return;
+  lastShared = it.id;
+  if (roomSpUris.has(it.uri)) return;                         // the room itself started this one
+  const m = await api('spotify/match', { id: it.id, name: it.name, artist: it.artists?.[0]?.name || '', duration_ms: it.duration_ms });
+  if (m.track) { send({ t: 'add', ...trackOf(m.track) }); toast(`Added “${it.name}” from your Spotify to the room`); }
+}
+setInterval(() => { pollSpotifyNow().catch(() => {}); }, 7000);
+
+// ---------- people in the room: the admin can kick, block and unblock ----------
+function confirmBtn(label, fn, cls = 'btn ghost small') {
+  const b = h('button', { class: cls }, label); let armed = false, t;
+  b.addEventListener('click', async () => {
+    if (!armed) { armed = true; b.textContent = 'Sure?'; clearTimeout(t); t = setTimeout(() => { armed = false; b.textContent = label; }, 3000); return; }
+    armed = false; clearTimeout(t); await fn();
+  });
+  return b;
+}
+async function modAct(kind, p) {
+  const r = await api('rooms/' + kind, { room: room.id, member: p.id });
+  toast(r.error ? 'That did not work' : ({ kick: 'Removed ', block: 'Blocked ', unblock: 'Unblocked ' }[kind]) + p.name);
+  loadPeople();
+}
+async function loadPeople() {
+  if (!room) return;
+  const r = await api('rooms/people?room=' + room.id);
+  const box = $('#people'); box.replaceChildren();
+  if (r.error) { box.append(h('div', { class: 's err' }, 'Could not load the people list')); return; }
+  for (const p of r.people) {
+    box.append(h('div', { class: 'row' },
+      h('span', { class: 'dot' + (p.online ? ' on' : '') }),
+      h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name + (p.me ? ' (you)' : '') + (p.admin ? ' · admin' : '')), h('div', { class: 's' }, p.online ? 'in the room now' : 'not here right now')),
+      r.owner && !p.me && confirmBtn('Kick', () => modAct('kick', p)),
+      r.owner && !p.me && confirmBtn('Block', () => modAct('block', p))));
+  }
+  $('#blockedbox').hidden = !r.owner;
+  const bl = $('#blocked'); bl.replaceChildren();
+  if (r.owner) {
+    if (!r.blocked.length) bl.append(h('div', { class: 's' }, 'Nobody is blocked'));
+    for (const p of r.blocked) bl.append(h('div', { class: 'row' }, h('div', { style: 'flex:1' }, p.name), h('button', { class: 'btn small', onclick: () => modAct('unblock', p) }, 'Unblock')));
+  }
 }
 
 // ---------- room UI ----------
@@ -367,6 +511,8 @@ function setTab(t) {
   document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   if (t === 'pls') loadMiniPls();
   if (t === 'lyrics') { renderLyrics(); }
+  clearInterval(peopleTimer);
+  if (t === 'people') { loadPeople(); peopleTimer = setInterval(loadPeople, 8000); }
 }
 
 function render() {
@@ -518,7 +664,7 @@ function queuePlaylist(p) {
 }
 
 async function showPlaylists(from) {
-  plFrom = from; openPl = null; show('pls'); loadSpStatus(); await loadPls();
+  plFrom = from; openPl = null; show('pls'); loadLinks(); await loadPls();
 }
 async function loadPls() {
   const r = await api('playlists');
@@ -611,7 +757,23 @@ function wire() {
     curLyr = parsed; vinyl.setLyrics(parsed); lastLyrI = -1; $('#lyrstat').textContent = '♪ Lyrics added by you';
     renderLyrics(); toast('Saved — everyone gets these lyrics now');
   });
-  on('spdisc', 'click', async () => { await api('spotify/disconnect', {}); spot = null; loadSpStatus(); });
+  on('spdisc', 'click', async () => { await api('spotify/disconnect', {}); spot = null; spApiObj = null; loadLinks(); });
+  on('ggdisc', 'click', async () => { await api('google/disconnect', {}); loadLinks(); });
+  on('spshare', 'change', e => {
+    store.set('spshare', e.target.checked ? '1' : '0'); lastShared = '';
+    toast(e.target.checked ? 'Songs you play on Spotify will be added to the room queue' : 'Sharing off');
+  });
+  for (const [id, prov] of [['cSpotify', 'spotify'], ['cGoogle', 'google'], ['spconnect', 'spotify'], ['ggconnect', 'google']]) on(id, 'click', e => connectClick(e, prov));
+  on('cGuest', 'click', () => { store.set('guest', '1'); goLobby(); });
+  on('cContinue', 'click', goLobby);
+  on('leave', 'click', async () => {                                // leave for good (two taps)
+    const b = $('#leave');
+    if (b.dataset.armed !== '1') { b.dataset.armed = '1'; b.textContent = 'Tap again to leave'; setTimeout(() => { b.dataset.armed = ''; b.textContent = 'Leave'; }, 3000); return; }
+    b.dataset.armed = ''; b.textContent = 'Leave';
+    const id = room.id;
+    await api('rooms/leave', { id });
+    leaveRoom(); toast('You left the room');
+  });
   on('spplay', 'change', e => {
     store.set('spplay', e.target.checked ? '1' : '0');
     if (e.target.checked) { setupSpot(); warnedSp = false; toast('Open the Spotify app on this device before the next song'); }
@@ -691,15 +853,22 @@ async function init() {
   me = await r.json();
   await pick();
   navigator.serviceWorker?.register('/sw.js');
-  await loadSpStatus();
-  const sp = new URLSearchParams(location.search).get('sp');          // coming back from Spotify's login page
-  if (sp) {
+  await loadLinks();
+
+  const qs = new URLSearchParams(location.search), sp = qs.get('sp'), gg = qs.get('gg');   // back from Spotify / Google
+  if (sp || gg) {
     history.replaceState(null, '', location.pathname + location.hash);
-    toast({ ok: 'Spotify connected', err: 'Spotify login failed — try again', denied: 'Spotify login was cancelled', notallowed: 'This Spotify account is not on the app’s user list yet (the owner adds you in the Spotify dashboard)', noid: 'Spotify is not set up on the server yet' }[sp] || 'Spotify: ' + sp);
-    return showPlaylists('lobby');
+    const why = {
+      ok: 'connected', err: 'login failed — try again', denied: 'login was cancelled', noid: 'is not set up on the server yet',
+      notallowed: 'did not let this account in (the owner must add you as a test user)'
+    }, name = sp ? 'Spotify' : 'YT Music', code = sp || gg;
+    toast(`${name} ${why[code] || code}`);
+    goLobby();
+    if (code === 'ok') syncAll(sp ? 'spotify' : 'google');       // bring their playlists over right away
+    return;
   }
   const m = location.hash.match(/r=([A-Za-z0-9]{6})/);       // an invite link opens that room directly
   if (m) return joinCode(m[1]);
-  show('lobby'); loadLobby();
+  startScreen();
 }
 init();

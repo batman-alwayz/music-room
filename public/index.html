@@ -24,14 +24,15 @@
   .tabbtn{background:#14161a;color:#8b9099;border:0;border-radius:99px;padding:8px 14px;font:inherit;cursor:pointer}
   .tabbtn.on{background:#e9ebee;color:#0c0d10}
   .tabpanel{display:none}
-  .tabsarea[data-tab="search"] #tab-search,.tabsarea[data-tab="queue"] #tab-queue,.tabsarea[data-tab="pls"] #tab-pls,.tabsarea[data-tab="lyrics"] #tab-lyrics{display:block}
-  @media (min-width:1050px){
-    .main{grid-template-columns:minmax(380px,460px) 1fr}
-    body.bigdisc .main{grid-template-columns:minmax(640px,680px) 1fr}
-    .tabsarea{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
-    .tabbar{grid-column:1}
-    #tab-search,#tab-pls,#tab-lyrics{grid-column:1}
-    #tab-queue{display:block !important;grid-column:2;grid-row:1 / span 3}
+  .tabsarea[data-tab="search"] #tab-search,.tabsarea[data-tab="queue"] #tab-queue,.tabsarea[data-tab="pls"] #tab-pls,.tabsarea[data-tab="lyrics"] #tab-lyrics,.tabsarea[data-tab="people"] #tab-people{display:block}
+  @media (min-width:1050px){                            /* laptop: search/lyrics/playlists | THE DISC IN THE CENTRE | queue */
+    .main{grid-template-columns:minmax(300px,1fr) minmax(400px,520px) minmax(300px,1fr);align-items:start}
+    body.bigdisc .main{grid-template-columns:minmax(260px,1fr) minmax(640px,680px) minmax(260px,1fr)}
+    .tabsarea{display:contents}
+    .left{grid-column:2;grid-row:1 / span 8}
+    .tabbar{grid-column:1;grid-row:1}
+    #tab-search,#tab-pls,#tab-lyrics,#tab-people{grid-column:1;grid-row:2}
+    #tab-queue{display:block !important;grid-column:3;grid-row:1 / span 8}
     .tabbtn[data-tab="queue"]{display:none}
   }
 
@@ -77,6 +78,14 @@
   #lyrlist{position:relative;max-height:58vh;overflow:auto;padding:6px 2px}
   .lyrline{padding:7px 0;color:#6b7280;font-size:16px;line-height:1.35;transition:color .2s,font-size .2s}
   .lyrline.on{color:#8ffcff;font-size:21px;font-weight:600}
+  .conn{max-width:360px;margin:15vh auto 0}
+  .cbtn{display:block;width:100%;box-sizing:border-box;text-align:center;padding:15px;font-size:16px;font-weight:600;border-radius:12px;margin-top:10px}
+  .green{background:#1db954;color:#04130a}.red{background:#ff0033;color:#fff}
+  .cnote{text-align:center;min-height:15px}
+  .linkbtn{background:none;border:0;color:#8b9099;text-decoration:underline;cursor:pointer;font:inherit;display:block;margin:18px auto 0}
+  a.chip,button.chip{text-decoration:none;color:inherit;border:0;font:inherit;font-size:12px;cursor:pointer}
+  .chip.ok{background:#12301f;color:#7dffb0}
+  .dot{width:9px;height:9px;border-radius:50%;background:#444;flex:none}.dot.on{background:#3ddc84}
   #np{padding:4px 0;text-align:center}
   #ctl{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;padding:6px 0}
   #ctl .btn{font-size:18px;min-width:48px}
@@ -101,9 +110,24 @@
   <div id="err" class="s err"></div>
 </div>
 
+<div id="connect" hidden>
+  <div class="conn">
+    <div class="t" style="font-size:26px;text-align:center">Room</div>
+    <div class="s" style="text-align:center;margin:6px 0 20px">Listen together, in sync. Connect your music and your playlists come along.</div>
+    <a id="cSpotify" class="btn cbtn green" href="/auth/spotify/login">Connect Spotify</a>
+    <div id="cSpotifyNote" class="s cnote"></div>
+    <a id="cGoogle" class="btn cbtn red" href="/auth/google/login">Connect YT Music</a>
+    <div id="cGoogleNote" class="s cnote"></div>
+    <button id="cContinue" class="btn cbtn ghost" hidden>Continue →</button>
+    <button id="cGuest" class="linkbtn">continue as guest</button>
+  </div>
+</div>
+
 <div id="lobby" hidden>
   <div class="top"><div class="t" style="flex:1">Room</div><a class="s" href="/auth/logout">Log out</a></div>
   <div style="max-width:520px;margin:0 auto">
+    <div id="accts" class="chips" style="margin:4px 0 10px"></div>
+    <div id="syncbar" class="s" hidden style="margin-bottom:8px"></div>
     <div class="card">
       <div class="s">Create a room</div>
       <input id="rname" placeholder="Room name" maxlength="30">
@@ -126,6 +150,7 @@
     <button id="back" class="btn ghost" title="Back to rooms">←</button>
     <div style="flex:1;min-width:0"><div id="rtitle" class="t"></div><div id="rcodeline" class="s"></div></div>
     <button id="invite" class="btn ghost">Invite</button>
+    <button id="leave" class="btn ghost" title="Leave this room for good">Leave</button>
   </div>
   <div class="main">
     <div class="left">
@@ -152,6 +177,7 @@
         <button class="tabbtn on" data-tab="search">Search</button>
         <button class="tabbtn" data-tab="queue" id="qtab">Queue</button>
         <button class="tabbtn" data-tab="lyrics">Lyrics</button>
+        <button class="tabbtn" data-tab="people">People</button>
         <button class="tabbtn" data-tab="pls">Playlists</button>
       </div>
 
@@ -177,6 +203,15 @@
           <div class="s">No lyrics found for this song. Paste them here (plain text or with [mm:ss.xx] timing) and everyone gets them.</div>
           <textarea id="lyrta" placeholder="Paste lyrics…"></textarea>
           <button id="lyrsave" class="btn">Save lyrics for everyone</button>
+        </div>
+      </div>
+
+      <div id="tab-people" class="tabpanel">
+        <div class="s" style="margin:4px 0">In this room</div>
+        <div id="people"></div>
+        <div id="blockedbox" hidden>
+          <div class="s" style="margin:14px 0 4px">Blocked (they cannot rejoin until you unblock them)</div>
+          <div id="blocked"></div>
         </div>
       </div>
 
@@ -210,8 +245,18 @@
           <a id="spconnect" class="btn" href="/auth/spotify/login" hidden>Connect Spotify</a>
           <button id="spdisc" class="btn ghost" hidden>Disconnect</button>
         </div>
-        <label id="spplayrow" class="s" hidden style="display:block;margin-top:8px"><input type="checkbox" id="spplay">Play songs through my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
+        <label id="spplayrow" class="s" hidden style="display:block;margin-top:8px"><input type="checkbox" id="spplay">Play the room's songs on my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
+        <label id="spsharerow" class="s" hidden style="display:block;margin-top:6px"><input type="checkbox" id="spshare">Add songs I play on Spotify to the room queue (the room can see what you play)</label>
         <div id="splist"></div>
+      </div>
+      <div class="card" id="ggcard">
+        <div class="t" style="font-size:16px">YouTube Music</div>
+        <div id="ggstat" class="s"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <a id="ggconnect" class="btn" href="/auth/google/login" hidden>Connect YT Music</a>
+          <button id="ggdisc" class="btn ghost" hidden>Disconnect</button>
+        </div>
+        <div id="gglist"></div>
       </div>
     </div>
     <div id="pldetail" hidden>

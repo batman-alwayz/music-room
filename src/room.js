@@ -35,6 +35,11 @@ export class Room {
       return new Response(null, { status: 101, webSocket: c });
     }
     if (path === 'state') return this.reply();
+    if (path === 'kick') {                                   // admin removed someone: close their connection
+      const k = await req.json().catch(() => ({}));
+      await this.kick(String(k.member || ''));
+      return this.reply();
+    }
     const b = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
     await this.on(path, b, req.headers.get('x-member'));
     return this.reply();
@@ -51,6 +56,16 @@ export class Room {
     let m; try { m = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw)); } catch { return; }
     if (a?.id && m?.t) await this.on(m.t, m, a.id);
   }
+  async kick(id) {
+    for (const ws of this.state.getWebSockets()) {
+      if (ws.deserializeAttachment()?.id === id) { try { ws.close(4003, 'removed'); } catch {} }
+    }
+    delete this.s.present[id]; delete this.s.armed[id];
+    if (this.s.playing && this.allEnded()) await this.advance();
+    this.maybeStart();
+    await this.commit();
+  }
+
   async webSocketClose(ws) { await this.drop(ws); }
   async webSocketError(ws) { await this.drop(ws); }
 

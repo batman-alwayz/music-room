@@ -20,3 +20,4 @@ CREATE TABLE IF NOT EXISTS links (
   member TEXT, provider TEXT, access TEXT, refresh TEXT, exp INTEGER, ext_id TEXT, name TEXT, product TEXT,
   PRIMARY KEY (member, provider)
 );
+CREATE TABLE IF NOT EXISTS room_blocks ( room TEXT, member TEXT, blocked_by TEXT, at INTEGER, PRIMARY KEY (room, member) );

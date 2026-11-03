@@ -58,6 +58,83 @@ export function lineIndex(lyr, ms) {
 }
 
 // ---------- layer 2: sharp lyrics along the record ----------
+// Latin lyrics use a 5x7 pixel font: every letter is a rigid block of square pixels with hard edges (matching the pixel disc),
+// drawn at full screen resolution so it stays crisp. Other scripts (Hindi, Arabic, ...) fall back to a normal font.
+const FONT5 = {
+  A: '01110 10001 10001 11111 10001 10001 10001', B: '11110 10001 10001 11110 10001 10001 11110',
+  C: '01110 10001 10000 10000 10000 10001 01110', D: '11110 10001 10001 10001 10001 10001 11110',
+  E: '11111 10000 10000 11110 10000 10000 11111', F: '11111 10000 10000 11110 10000 10000 10000',
+  G: '01110 10001 10000 10111 10001 10001 01111', H: '10001 10001 10001 11111 10001 10001 10001',
+  I: '01110 00100 00100 00100 00100 00100 01110', J: '00111 00010 00010 00010 00010 10010 01100',
+  K: '10001 10010 10100 11000 10100 10010 10001', L: '10000 10000 10000 10000 10000 10000 11111',
+  M: '10001 11011 10101 10101 10001 10001 10001', N: '10001 11001 10101 10011 10001 10001 10001',
+  O: '01110 10001 10001 10001 10001 10001 01110', P: '11110 10001 10001 11110 10000 10000 10000',
+  Q: '01110 10001 10001 10001 10101 10010 01101', R: '11110 10001 10001 11110 10100 10010 10001',
+  S: '01111 10000 10000 01110 00001 00001 11110', T: '11111 00100 00100 00100 00100 00100 00100',
+  U: '10001 10001 10001 10001 10001 10001 01110', V: '10001 10001 10001 10001 10001 01010 00100',
+  W: '10001 10001 10001 10101 10101 11011 10001', X: '10001 10001 01010 00100 01010 10001 10001',
+  Y: '10001 10001 01010 00100 00100 00100 00100', Z: '11111 00001 00010 00100 01000 10000 11111',
+  0: '01110 10001 10011 10101 11001 10001 01110', 1: '00100 01100 00100 00100 00100 00100 01110',
+  2: '01110 10001 00001 00010 00100 01000 11111', 3: '11110 00001 00001 01110 00001 00001 11110',
+  4: '00010 00110 01010 10010 11111 00010 00010', 5: '11111 10000 11110 00001 00001 10001 01110',
+  6: '00110 01000 10000 11110 10001 10001 01110', 7: '11111 00001 00010 00100 01000 01000 01000',
+  8: '01110 10001 10001 01110 10001 10001 01110', 9: '01110 10001 10001 01111 00001 00010 01100',
+  "'": '00100 00100 01000 00000 00000 00000 00000', ',': '00000 00000 00000 00000 00110 00100 01000',
+  '.': '00000 00000 00000 00000 00000 01100 01100', '!': '00100 00100 00100 00100 00100 00000 00100',
+  '?': '01110 10001 00001 00010 00100 00000 00100', '-': '00000 00000 00000 11111 00000 00000 00000',
+  ':': '00000 01100 01100 00000 01100 01100 00000', '(': '00010 00100 01000 01000 01000 00100 00010',
+  ')': '01000 00100 00010 00010 00010 00100 01000', '&': '01100 10010 10100 01000 10101 10010 01101',
+  '"': '01010 01010 00000 00000 00000 00000 00000', '/': '00001 00001 00010 00100 01000 10000 10000',
+  '*': '00010 00011 00010 00010 01110 11110 01100',            // a little music note
+  ' ': '00000 00000 00000 00000 00000 00000 00000'
+};
+const GLYPH = {};
+for (const [ch, rows] of Object.entries(FONT5)) GLYPH[ch] = rows.split(' ').join('');
+
+const norm = t => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/…/g, '...').replace(/[♪♫]/g, '*')
+  .toUpperCase().replace(/\s+/g, ' ').trim();
+// true when the pixel font can draw (nearly) all of this line
+const blockable = t => { const c = [...norm(t)]; return c.length > 0 && c.filter(x => !GLYPH[x]).length / c.length <= 0.2; };
+
+// pixel size + line breaks so the whole line fits on the record (letters are 5 px wide + 1 px gap)
+export function layoutBlocks(text, R) {
+  let t = norm(text).split('').map(c => (GLYPH[c] ? c : '?')).join('');
+  const r1 = R * ROW1, r2 = R * ROW2;
+  const cap = (r, p) => Math.floor((MAXA * r / p + 1) / 6);            // letters that fit on one row
+  let p = R * 0.19 / 7;
+  for (let k = 0; k < 8; k++, p *= 0.9) {
+    if (t.length <= cap(r1, p)) return [{ t, r: r1, p }];
+    const w = t.split(' ');
+    for (let i = w.length - 1; i > 0; i--) {
+      const a = w.slice(0, i).join(' '), b = w.slice(i).join(' ');
+      if (a.length <= cap(r1, p) && b.length <= cap(r2, p)) return [{ t: a, r: r1, p }, { t: b, r: r2, p }];
+    }
+  }
+  const c1 = cap(r1, p);                                                 // still too long: cut it
+  return [{ t: t.slice(0, Math.max(1, c1 - 2)).trimEnd() + '..', r: r1, p }];
+}
+
+export function drawBlockRows(ctx, rows, cx, cy) {
+  ctx.save(); ctx.translate(cx, cy);
+  for (const pass of [0, 1]) {                                           // 0: dark outline, 1: the bright letters
+    ctx.fillStyle = pass ? '#8ffcff' : 'rgba(2,10,22,0.96)';
+    for (const row of rows) {
+      const chars = [...row.t], p = row.p, o = pass ? 0 : p * 0.55, e = pass ? 0.35 : 0.35;   // e: tiny overlap hides seams
+      let ang = -(((chars.length * 6 - 1) * p) / row.r) / 2;
+      chars.forEach((ch, i) => {
+        const g = GLYPH[ch]; if (!g) return;
+        const a = ang + ((i * 6 + 2.5) * p) / row.r;                     // letters turn to follow the circle, tops outwards
+        ctx.save(); ctx.rotate(a); ctx.translate(0, -row.r);
+        for (let y = 0; y < 7; y++) for (let x = 0; x < 5; x++) if (g[y * 5 + x] === '1') ctx.fillRect((x - 2.5) * p - o, (y - 3.5) * p - o, p + e + 2 * o, p + e + 2 * o);
+        ctx.restore();
+      });
+    }
+  }
+  ctx.restore();
+}
+
+// text for scripts the pixel font cannot draw (normal font, hard corners)
 const FONT = px => `700 ${px}px "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans Devanagari", sans-serif`;
 const ROW1 = 0.815, ROW2 = 0.585;                            // text row radii as a share of the disc radius
 const MAXA = 3.9;                                            // each row may use about 220 degrees around the top
@@ -87,7 +164,7 @@ export function layoutLine(ctx, text, R) {
 }
 
 export function drawArcRows(ctx, rows, cx, cy) {
-  ctx.save(); ctx.translate(cx, cy); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  ctx.save(); ctx.translate(cx, cy); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'miter'; ctx.miterLimit = 2;
   for (const row of rows) {
     ctx.font = FONT(row.px);
     const chars = parts(row.t), gap = row.px * 0.05, ws = chars.map(ch => ctx.measureText(ch).width + gap);
@@ -101,6 +178,13 @@ export function drawArcRows(ctx, rows, cx, cy) {
     });
   }
   ctx.restore();
+}
+
+// draw one lyric line with whichever font can show it
+export function drawLine(ctx, text, W) {
+  const R = (RD / N) * W;
+  if (blockable(text)) drawBlockRows(ctx, layoutBlocks(text, R), W / 2, W / 2);
+  else drawArcRows(ctx, layoutLine(ctx, text, R), W / 2, W / 2);
 }
 
 // everything smooth that sits on top of the pixel disc
@@ -176,7 +260,7 @@ export function createVinyl(canvas, overlay, api) {
     if (text + '|' + W !== key) {                            // new lyric line: redraw the text layer, fade it in
       key = text + '|' + W; fadeAt = now;
       tctx.clearRect(0, 0, W, W);
-      drawArcRows(tctx, layoutLine(tctx, text, (RD / N) * W), W / 2, W / 2);
+      drawLine(tctx, text, W);
     }
     drawOverlay(octx, W, { rot, spin: api.spin(), cover: haveCover ? cov : null, textCanvas: txt, alpha: Math.min(1, (now - fadeAt) / 220) });
   }

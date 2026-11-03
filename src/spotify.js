@@ -3,11 +3,12 @@
 // Needs the SPOTIFY_CLIENT_ID secret (one Spotify app, no client secret: PKCE) and your Worker's
 // /auth/spotify/callback added as a Redirect URI in that app.
 import { musicSearch } from './search.js';
+import { ensureTarget, addTracks } from './libsync.js';
 
 const json = (d, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { 'content-type': 'application/json' } });
 const enc = new TextEncoder();
 const b64 = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const SCOPES = 'playlist-read-private playlist-read-collaborative user-library-read user-read-playback-state user-modify-playback-state';
+const SCOPES = 'playlist-read-private playlist-read-collaborative user-library-read user-read-playback-state user-modify-playback-state user-read-currently-playing';
 const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const redirectUri = req => new URL('/auth/spotify/callback', req.url).href;
 const back = (req, why) => new Response(null, { status: 302, headers: { location: new URL('/?sp=' + why, req.url).href } });
@@ -109,7 +110,8 @@ export async function spotifyApi(req, env, me, p) {
 
   if (p === '/api/spotify/status') {
     const l = await link();
-    return json({ hasId: !!env.SPOTIFY_CLIENT_ID, connected: !!l, name: l?.name || null });
+    // a real Spotify Client ID is 32 letters/numbers: catches a wrong value pasted as the secret
+    return json({ hasId: !!env.SPOTIFY_CLIENT_ID, idOk: /^[a-f0-9]{32}$/i.test(env.SPOTIFY_CLIENT_ID || ''), connected: !!l, name: l?.name || null });
   }
   if (p === '/api/spotify/disconnect' && post) {
     await env.DB.prepare("DELETE FROM links WHERE member=? AND provider='spotify'").bind(me.id).run();
@@ -129,6 +131,13 @@ export async function spotifyApi(req, env, me, p) {
     return json({ items: [{ id: 'liked', name: 'Liked songs', n: liked.data?.total ?? 0 }, ...mine] });
   }
 
+  if (p === '/api/spotify/match' && post) {               // "I'm playing this on Spotify" -> the YouTube version for the room
+    const id = String(b.id || '');
+    if (!/^\w{10,40}$/.test(id) || !b.name) return json({ error: 'bad' }, 400);
+    const m = await matchOne(env, { id, name: String(b.name), artists: [{ name: String(b.artist || '') }], duration_ms: +b.duration_ms || 0 }).catch(() => null);
+    return m ? json({ track: m }) : json({ error: 'none' }, 404);
+  }
+
   if (p === '/api/spotify/import' && post) {              // one batch; the page keeps calling until done
     const id = String(b.id || ''), offset = Math.max(0, +b.offset || 0);
     if (id !== 'liked' && !/^[\w]{10,40}$/.test(id)) return json({ error: 'bad' }, 400);
@@ -136,34 +145,15 @@ export async function spotifyApi(req, env, me, p) {
     const r = await spGet(env, me.id, path);
     if (!r.data) return json({ error: 'spotify', status: r.status }, 502);
 
-    let target = String(b.target || '');
-    const name = String(b.name || 'Spotify').trim().slice(0, 30) || 'Spotify';
-    if (!target) {
-      const ex = await env.DB.prepare('SELECT id FROM playlists WHERE owner=? AND name=?').bind(me.id, name).first();
-      if (ex) target = ex.id;
-      else {
-        const c = await env.DB.prepare('SELECT COUNT(*) n FROM playlists WHERE owner=?').bind(me.id).first();
-        if (c.n >= 30) return json({ error: 'limit' }, 409);
-        target = crypto.randomUUID().slice(0, 8);
-        await env.DB.prepare('INSERT INTO playlists (id,owner,name,created) VALUES (?,?,?,?)').bind(target, me.id, name, Date.now()).run();
-      }
-    } else {
-      const own = await env.DB.prepare('SELECT 1 x FROM playlists WHERE id=? AND owner=?').bind(target, me.id).first();
-      if (!own) return json({ error: 'nf' }, 404);
-    }
+    const tg = await ensureTarget(env, me, b.name || 'Spotify', String(b.target || ''));
+    if (tg.error) return json({ error: tg.error }, tg.status);
+    const target = tg.target, name = tg.name;
 
     const items = r.data.items || [];
     const total = r.data.total ?? 0;
     const tracks = items.map(x => x?.item || x?.track || x).filter(t => t && t.id && t.type !== 'episode');
     const matched = await Promise.all(tracks.map(t => matchOne(env, t).catch(() => null)));
-    const c = await env.DB.prepare('SELECT COUNT(*) n, COALESCE(MAX(pos),0) m FROM playlist_tracks WHERE playlist=?').bind(target).first();
-    let pos = c.m, room = 200 - c.n, added = 0;
-    for (const m of matched) {
-      if (!m || room <= 0) continue;
-      await env.DB.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist,tid,title,artist,dur,cover,pos) VALUES (?,?,?,?,?,?,?)')
-        .bind(target, m.tid, String(m.title).slice(0, 200), String(m.artist || '').slice(0, 100), Math.round(m.dur), m.cover || null, ++pos).run();
-      added++; room--;
-    }
+    const { added, room } = await addTracks(env, target, matched);
     const next = offset + items.length;
     return json({ target, name, added, skipped: tracks.length - added, next, total, done: !items.length || next >= total || room <= 0 });
   }
