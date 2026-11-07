@@ -48,23 +48,26 @@ export const connect = api => {
     return device;
   };
   const q = () => `device_id=${device}`;
+  let cached = null, cachedAt = 0;
+  const read = async (force = false) => {
+    if (!force && cached && Date.now() - cachedAt < 1800) return cached;
+    cached = await api.get('/me/player');
+    cachedAt = Date.now();
+    if (cached?.device?.id) device = cached.device.id;
+    return cached;
+  };
+  const snapshot = s => s ? ({
+    trackId: s.item?.id || null, uri: s.item?.uri || null,
+    paused: !s.is_playing, position: Number(s.progress_ms) || 0,
+    duration: Number(s.item?.duration_ms) || 0,
+    timestamp: Number(s.timestamp) || 0, source: 'api'
+  }) : null;
   return {
     ready: async () => !!(await pick()),                     // false = open the Spotify app first
-    state: async () => {
-      const s = await api.get('/me/player');
-      if (!s) return null;
-      if (s.device?.id) device = s.device.id;                // follow Spotify Connect device transfers
-      return {
-        trackId: s.item?.id || null, uri: s.item?.uri || null,
-        paused: !s.is_playing, position: Number(s.progress_ms) || 0,
-        duration: Number(s.item?.duration_ms) || 0,
-        timestamp: Number(s.timestamp) || 0, source: 'api'
-      };
-    },
+    state: async () => snapshot(await read(true)),
     position: async () => {
-      const s = await api.get('/me/player');
+      const s = await read();
       if (!s || s.progress_ms == null) return null;
-      if (s.device?.id) device = s.device.id;
       return s.progress_ms + (s.is_playing && s.timestamp ? Math.min(5000, Math.max(0, Date.now() - s.timestamp)) : 0);
     },
     seek: async ms => {
@@ -82,7 +85,7 @@ export const connect = api => {
     setMuted: async m => {                                   // Spotify has no mute: use volume, and put it back after
       if (!device) return;
       if (m) {
-        const s = await api.get('/me/player');
+        const s = await read(true);
         const v = s?.device?.volume_percent;
         if (prevVol == null && v > 0) prevVol = v;
         await api.put(`/me/player/volume?volume_percent=0&${q()}`);
@@ -92,7 +95,7 @@ export const connect = api => {
       let last = 0, seen = false;
       clearInterval(timer);
       timer = setInterval(async () => {
-        const s = await api.get('/me/player');
+        const s = await read();
         if (!s) return;
         if (s.is_playing) { seen = true; last = s.progress_ms; return; }
         if (seen && last >= dur - 4000) { clearInterval(timer); res(); }
@@ -162,10 +165,7 @@ export function sdkConnect(api, getToken, onAutoplay, onState) {
         timestamp: Number(s.timestamp) || 0, source: 'api'
       };
     },
-    position: async () => {
-      const s = await api.get('/me/player');
-      return !s || s.progress_ms == null ? null : s.progress_ms;
-    },
+    position: async () => { const s = await player?.getCurrentState?.(); return !s ? null : s.position; },
     seek: ms => api.put(`/me/player/seek?position_ms=${Math.round(ms)}`),
     play: async (uri, ms) => {
       const current = await api.get('/me/player');
