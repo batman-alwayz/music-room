@@ -52,8 +52,8 @@ export const connect = api => {
     ready: async () => !!(await pick()),                     // false = open the Spotify app first
     position: async () => {
       const s = await api.get('/me/player');
-      if (!s || s.progress_ms == null || !s.is_playing) return null;
-      return s.progress_ms + (s.timestamp ? Math.min(5000, Math.max(0, Date.now() - s.timestamp)) : 0);
+      if (!s || s.progress_ms == null) return null;
+      return s.progress_ms + (s.is_playing && s.timestamp ? Math.min(5000, Math.max(0, Date.now() - s.timestamp)) : 0);
     },
     seek: ms => device && api.put(`/me/player/seek?position_ms=${Math.round(ms)}&${q()}`),
     play: async (uri, ms) => {
@@ -125,7 +125,7 @@ export function sdkConnect(api, getToken, onAutoplay) {
     error: () => err,
     activate: () => player?.activateElement?.(),
     disconnect: () => player?.disconnect?.(),
-    position: async () => { const s = await player?.getCurrentState?.(); return !s || s.paused ? null : s.position; },
+    position: async () => { const s = await player?.getCurrentState?.(); return !s ? null : s.position; },
     seek: ms => player?.seek?.(Math.round(ms)),
     play: async (uri, ms) => {
       const r = await api.put(`/me/player/play?device_id=${device}`, { uris: [uri], position_ms: Math.round(ms) });
