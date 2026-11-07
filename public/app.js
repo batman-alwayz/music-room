@@ -18,7 +18,8 @@ let S = fresh();
 let me, player, yt, spot = null, spApiObj = null, vinyl, loop, ws, ready = false, room = null;
 let spLink = { connected: false, hasId: false }, spTok = null, spExp = 0, warnedSp = false;
 let curLyr = null, lastLyrI = -1, seekDrag = false;
-let spotifyPos = null, spotifyPosAt = 0, spotifyPosBusy = false;
+let spotifyPos = null, spotifyPosAt = 0, spotifyIsPlaying = false;
+let spotifyObserved = null, spotifyStateBusy = false, spotifyEchoUntil = 0;
 let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null;
 let stage = null, spotKind = '', shapeId = 'pixel';
 const roomSpUris = new Set();
@@ -146,7 +147,10 @@ async function joinCode(code) {
 }
 
 // ---------- room connection ----------
-function send(m) { if (ws?.readyState === 1) ws.send(JSON.stringify(m)); }
+function send(m) {
+  if (['pause', 'resume', 'seek'].includes(m.t)) spotifyEchoUntil = Date.now() + 2600;
+  if (ws?.readyState === 1) ws.send(JSON.stringify(m));
+}
 function closeWS() { const w = ws; ws = null; if (w) { w.onclose = null; w.onmessage = null; w.close(); } }
 
 function openRoom(r) {
@@ -191,11 +195,12 @@ function connectWS() {
 
 function onFrame({ s, now }) {
   setOffset(now);
-  const was = S.playing, wasPaused = S.paused, prevStart = S.startAt, prevGo = S.goAt, prevSeq = S.seq;
+  const was = S.playing, wasPaused = S.paused, prevStart = S.startAt, prevGo = S.goAt, prevSeq = S.seq, prevPos = S.pos;
   S = s;
+  if (S.paused !== wasPaused || S.startAt !== prevStart || S.pos !== prevPos) spotifyEchoUntil = Date.now() + 2600;
   if ((S.playing?.tid || null) !== lastVinylTid) {           // new song on the record
     lastVinylTid = S.playing?.tid || null;
-    spotifyPos = null; spotifyPosAt = 0;
+    spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false; spotifyObserved = null;
     vinyl.setTrack(S.playing); stage.setTrack(S.playing); stage.setLyrics(null);
     curLyr = null; lastLyrI = -1; renderLyrics();
     if (S.playing) loadLyrics(S.playing);
@@ -207,6 +212,8 @@ function onFrame({ s, now }) {
       pauseAll();
     } else if (!S.paused && (beganSeq !== S.seq || wasPaused)) {   // new song, "join now", or resume
       beganSeq = S.seq; begin();
+    } else if (S.paused && S.pos !== prevPos) {
+      Promise.resolve(player?.seek?.(S.pos)).catch(() => {});                    // paused seek from Spotify or the room
     } else if (!S.paused && prevStart && S.seq === prevSeq && S.goAt === prevGo && S.startAt !== prevStart) {
       Promise.resolve(player?.seek?.(serverNow() - S.startAt)).catch(() => {});   // someone dragged the sound bar: jump now
     }
@@ -358,22 +365,8 @@ async function tickSeek() {
   if (!t) { el.value = 0; $('#tcur').textContent = '0:00'; $('#tdur').textContent = '0:00'; return; }
 
   let position = songMs();
-  if (spotifyPlayback() && spot?.position) {
-    const pollEvery = spotKind === 'browser' ? 500 : 1200;
-    if (!spotifyPosBusy && Date.now() - spotifyPosAt >= pollEvery) {
-      spotifyPosBusy = true;
-      try {
-        const p = await spot.position();
-        spotifyPos = Number.isFinite(p) ? p : null;
-        spotifyPosAt = Date.now();
-      } catch {
-        spotifyPos = null;
-        spotifyPosAt = Date.now();
-      } finally {
-        spotifyPosBusy = false;
-      }
-    }
-    if (spotifyPos != null) position = spotifyPos;
+  if (spotifyPlayback() && spotifyPos != null) {
+    position = spotifyPos + (spotifyIsPlaying ? Math.max(0, Date.now() - spotifyPosAt) : 0);
   }
 
   const ms = Math.max(0, Math.min(position, t.dur * 1000));
@@ -385,6 +378,43 @@ setInterval(() => { if (!room || !me) return; tickSeek(); tickLyrics(); }, 250);
 // ---------- Accounts: Spotify + YouTube Music (Google) ----------
 const spOn = () => spLink.connected && store.get('spplay') !== '0';       // on by default once connected
 const spotifyPlayback = () => spOn() && player === spot;
+
+async function observeSpotifyState(st, fromSdk = false) {
+  if (!st) { spotifyObserved = null; spotifyPos = null; spotifyIsPlaying = false; return; }
+  spotifyPos = Number.isFinite(st.position) ? st.position : null;
+  spotifyPosAt = Date.now();
+  spotifyIsPlaying = !st.paused;
+
+  if (!room || !S.playing || !spotifyPlayback() || !st.trackId || st.source === 'ad') {
+    spotifyObserved = st;
+    return;
+  }
+  const previous = spotifyObserved;
+  spotifyObserved = st;
+  if (!previous || previous.trackId !== st.trackId) return;     // establish a baseline; don't hijack a newly joined room
+  if (Date.now() < spotifyEchoUntil) return;
+
+  const uri = await findUri(spApiObj, S.playing).catch(() => null);
+  if (!uri || (st.uri && st.uri !== uri)) return;               // only mirror controls for the room's current song
+
+  const changed = fromSdk || (st.timestamp && previous.timestamp && st.timestamp !== previous.timestamp);
+  if (!changed) return;
+  if (st.paused !== S.paused) {
+    send({ t: st.paused ? 'pause' : 'resume' });
+    return;
+  }
+  const expected = S.paused ? S.pos : Math.max(0, serverNow() - S.startAt);
+  if (Math.abs(st.position - expected) > 2600) send({ t: 'seek', ms: st.position });
+}
+
+async function pollSpotifyState() {
+  if (!room || !spOn() || !spotifyPlayback() || !spot?.state || spotifyStateBusy) return;
+  spotifyStateBusy = true;
+  try { await observeSpotifyState(await spot.state()); }
+  catch {} finally { spotifyStateBusy = false; }
+}
+setInterval(() => { pollSpotifyState().catch(() => {}); }, 2500);
+
 async function getSpToken(force) {
   if (!force && spTok && Date.now() < spExp - 60000) return spTok;
   const r = await api('spotify/token' + (force ? '?force=1' : ''));
