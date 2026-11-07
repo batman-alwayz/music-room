@@ -44,11 +44,14 @@ function applyDesign() {
     disc: store.get('design:disc') || DESIGN_DEFAULTS.disc
   };
   const root = document.documentElement;
+  const rgb = [16,8,0].map(s => (parseInt(colors.app.slice(1),16) >> s) & 255);
+  const luminance = rgb.reduce((sum,v,i) => sum + [0.2126,0.7152,0.0722][i] * (v/255 <= .04045 ? v/12.92 : Math.pow((v/255+.055)/1.055,2)),0);
+  const dark = luminance < .48;
   root.style.setProperty('--ui-bg', colors.app);
-  root.style.setProperty('--ui-panel', mixColor(colors.app, '#ffffff', .72));
-  root.style.setProperty('--ui-ink', '#252729');
-  root.style.setProperty('--ui-muted', mixColor(colors.app, '#252729', .56));
-  root.style.setProperty('--ui-line', mixColor(colors.app, '#252729', .12));
+  root.style.setProperty('--ui-panel', mixColor(colors.app, dark ? '#252729' : '#ffffff', .78));
+  root.style.setProperty('--ui-ink', dark ? '#f5f1ea' : '#252729');
+  root.style.setProperty('--ui-muted', mixColor(colors.app, dark ? '#ffffff' : '#252729', .56));
+  root.style.setProperty('--ui-line', mixColor(colors.app, dark ? '#ffffff' : '#252729', .18));
   root.style.setProperty('--ui-accent', colors.lyrics);
   root.style.setProperty('--ui-lyric', colors.lyrics);
   root.style.setProperty('--ui-disc-hue', colorHue(colors.disc) + 'deg');
