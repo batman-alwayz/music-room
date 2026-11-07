@@ -156,6 +156,7 @@ function closeWS() { const w = ws; ws = null; if (w) { w.onclose = null; w.onmes
 function openRoom(r) {
   closeWS(); clearTimers();
   room = r; S = fresh(); beganSeq = -1; lastDrift = 0; wantArmed = true; status = ''; lastVinylTid = null;
+  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false; spotifyEchoUntil = 0;
   lastShared = null; spQueuePrev = null;
   vinyl.setTrack(null); stage.setTrack(null);
   if (spOn()) { setupSpot(); spot.ready?.(); }                 // warm the Spotify player up so the first song is on time $('#lyrstat').textContent = '';
@@ -170,6 +171,7 @@ function leaveRoom() {
   closeWS(); clearTimers();
   pauseAll();
   room = null; S = fresh();
+  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false;
   history.replaceState(null, '', location.pathname);
   show('lobby'); loadLobby();
 }
@@ -428,7 +430,10 @@ function setupSpot() {
   if (spot && spotKind === want) return;
   spot?.cancel?.(); spot?.disconnect?.();
   spotKind = want;
-  spot = want === 'browser' ? sdkConnect(spApiObj, getSpToken, () => { $('#tap').hidden = false; }) : spConnect(spApiObj);
+  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false;
+  spot = want === 'browser'
+    ? sdkConnect(spApiObj, getSpToken, () => { $('#tap').hidden = false; }, st => observeSpotifyState(st, true))
+    : spConnect(spApiObj);
 }
 const bad = { connected: false, hasId: false, idOk: false };
 async function loadSpStatus() { const r = await api('spotify/status'); spLink = r.error ? bad : r; if (spLink.connected) setupSpot(); }
