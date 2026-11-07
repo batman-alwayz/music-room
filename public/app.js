@@ -1,7 +1,8 @@
 import { setOffset, serverNow, startLoop } from './sync.js';
 import { ytm, web, manual } from './players.js';
-import { createVinyl, parseLrc, lineIndex } from './vinyl.js';
-import { spApi, connect as spConnect, findUri } from './spotify.js';
+import { createVinyl, parseLrc, lineIndex, SHAPES } from './vinyl.js';
+import { spApi, connect as spConnect, sdkConnect, whyNot, queueAdds, findUri } from './spotify.js';
+import { createStage } from './stage.js';
 
 const QUOTA = 10;                                            // songs one person may have queued
 const fresh = () => ({
@@ -17,7 +18,8 @@ let S = fresh();
 let me, player, yt, spot = null, spApiObj = null, vinyl, loop, ws, ready = false, room = null;
 let spLink = { connected: false, hasId: false }, spTok = null, spExp = 0, warnedSp = false;
 let curLyr = null, lastLyrI = -1, seekDrag = false;
-let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = '';
+let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null;
+let stage = null, spotKind = '', shapeId = 'pixel';
 const roomSpUris = new Set();
 let wantArmed = true, beganSeq = -1, beginTimer, playToken = 0, lastDrift = 0, backoff = 1000, lastArm = 0;
 let status = '', routeNote = '', tab = 'search', lastItems = [], lastVinylTid = null;
@@ -149,7 +151,9 @@ function closeWS() { const w = ws; ws = null; if (w) { w.onclose = null; w.onmes
 function openRoom(r) {
   closeWS(); clearTimers();
   room = r; S = fresh(); beganSeq = -1; lastDrift = 0; wantArmed = true; status = ''; lastVinylTid = null;
-  vinyl.setTrack(null); $('#lyrstat').textContent = '';
+  lastShared = null; spQueuePrev = null;
+  vinyl.setTrack(null); stage.setTrack(null);
+  if (spOn()) { setupSpot(); spot.ready?.(); }                 // warm the Spotify player up so the first song is on time $('#lyrstat').textContent = '';
   history.replaceState(null, '', '#r=' + r.id);
   $('#rtitle').textContent = r.name;
   $('#rcodeline').textContent = 'Code ' + r.id;
@@ -190,7 +194,7 @@ function onFrame({ s, now }) {
   S = s;
   if ((S.playing?.tid || null) !== lastVinylTid) {           // new song on the record
     lastVinylTid = S.playing?.tid || null;
-    vinyl.setTrack(S.playing);
+    vinyl.setTrack(S.playing); stage.setTrack(S.playing); stage.setLyrics(null);
     curLyr = null; lastLyrI = -1; renderLyrics();
     if (S.playing) loadLyrics(S.playing);
   }
@@ -224,22 +228,31 @@ async function begin() {
   // which player? the person's own Spotify (if switched on, the app is open and the song exists there), else YouTube
   const chosen = (async () => {
     if (spOn()) {
-      try { setupSpot(); const uri = await findUri(spApiObj, t); if (uri && await spot.ready()) return { p: spot, id: uri }; } catch {}
-      if (!warnedSp) { warnedSp = true; toast('Spotify: song or app not found — this one plays from YouTube'); }
+      let why = '';
+      try {
+        setupSpot();
+        const uri = await findUri(spApiObj, t);
+        if (!uri) why = 'This song was not found on Spotify, so it plays from YouTube.';
+        else if (await spot.ready()) return { p: spot, id: uri };
+        else why = spot.error?.()?.kind === 'account_error' ? whyNot({ reason: 'PREMIUM_REQUIRED' }, spLink.name)
+          : spotKind === 'browser' ? 'Spotify’s in-browser player could not start (try “in my Spotify app”, or reconnect Spotify). Playing from YouTube.'
+          : 'Spotify could not find a player. Open the Spotify app on this device. Playing from YouTube.';
+      } catch { why = 'Spotify did not answer. Playing from YouTube.'; }
+      if (!warnedSp) { warnedSp = true; toast(why); }
     }
     return { p: yt, id: t.yt_id || t.tid };
   })();
   const wait = Math.max(0, S.goAt - serverNow() - 400);      // start a little early so everyone lands on 0:00 together
   beginTimer = setTimeout(async () => {
     if (token !== playToken) return;
-    let { p, id } = await chosen;
+    let { p, id } = await Promise.race([chosen, new Promise(r => setTimeout(() => r({ p: yt, id: t.yt_id || t.tid }), 6000))]);   // Spotify slow? YouTube instead
     if (token !== playToken) return;
     const late = Math.max(0, serverNow() - S.startAt);
     player = p;
-    const ok = await p.play(id, late);
-    if (p === spot && ok === false) {                        // no Premium / the app went away: use YouTube instead
-      store.set('spplay', '0'); renderSp();
-      toast('Spotify could not play (it needs Premium and the Spotify app open). Switched back to YouTube.');
+    const res = await p.play(id, late);
+    if (p === spot && !(res && res.ok)) {                    // Spotify said no: tell the person exactly why, then use YouTube
+      if (res?.reason === 'PREMIUM_REQUIRED') store.set('spplay', '0');
+      renderSp(); toast(whyNot(res, spLink.name));
       player = p = yt; await yt.play(t.yt_id || t.tid, late);
     }
     Promise.resolve(p.setMuted?.(muted)).catch(() => {});
@@ -270,7 +283,7 @@ function paintDrift(d) {
 async function loadLyrics(t) {
   const say = (tid, msg) => { if (S.playing?.tid === tid) $('#lyrstat').textContent = msg; };
   const label = l => !l ? '♪ No lyrics found for this song' : l.synced ? '♪ Synced lyrics' : '♪ Lyrics (not timed, spread over the song)';
-  const show1 = l => { curLyr = l; vinyl.setLyrics(l); lastLyrI = -1; say(t.tid, label(l)); renderLyrics(); };
+  const show1 = l => { curLyr = l; vinyl.setLyrics(l); stage.setLyrics(l); lastLyrI = -1; say(t.tid, label(l)); renderLyrics(); };
   if (lyrCache.has(t.tid)) { if (S.playing?.tid === t.tid) show1(lyrCache.get(t.tid)); return; }
   vinyl.setLyrics(null); say(t.tid, '♪ Loading lyrics…');
   const r = await api('lyrics?' + new URLSearchParams({ tid: t.tid, title: t.title, artist: t.artist || '', dur: String(t.dur) }));
@@ -328,7 +341,15 @@ async function getSpToken(force) {
   if (r.error) return null;
   spTok = r.token; spExp = r.exp; return spTok;
 }
-function setupSpot() { if (!spot) { spApiObj = spApi(getSpToken); spot = spConnect(spApiObj); } }
+const spWhere = () => store.get('spwhere') || (hasShell() ? 'app' : 'browser');   // laptops play inside the page, the phone apps use the Spotify app
+function setupSpot() {
+  if (!spApiObj) spApiObj = spApi(getSpToken);
+  const want = spWhere();
+  if (spot && spotKind === want) return;
+  spot?.cancel?.(); spot?.disconnect?.();
+  spotKind = want;
+  spot = want === 'browser' ? sdkConnect(spApiObj, getSpToken, () => { $('#tap').hidden = false; }) : spConnect(spApiObj);
+}
 const bad = { connected: false, hasId: false, idOk: false };
 async function loadSpStatus() { const r = await api('spotify/status'); spLink = r.error ? bad : r; if (spLink.connected) setupSpot(); }
 async function loadGgStatus() { const r = await api('google/status'); ggLink = r.error ? bad : r; }
@@ -373,10 +394,13 @@ async function renderSp() {                                   // the Spotify car
   $('#spdisc').hidden = !spLink.connected;
   $('#spplayrow').hidden = !spLink.connected;
   $('#spsharerow').hidden = !spLink.connected;
+  $('#spwhererow').hidden = !spLink.connected;
+  $('#spswitch').hidden = !spLink.connected;
+  $('#spwhere').value = spWhere();
   $('#spplay').checked = store.get('spplay') !== '0';
   $('#spshare').checked = store.get('spshare') === '1';
   $('#spstat').textContent = setupNote('Spotify', spLink)
-    || (spLink.connected ? `Connected as ${spLink.name}` : 'Not connected. Spotify’s own login page lets you continue with Google, Facebook or Apple.');
+    || (spLink.connected ? `Connected as ${spLink.name}${spLink.spid ? ' (' + spLink.spid + ')' : ''} — if that is not your Premium account, use “Use a different Spotify account”.` : 'Not connected. Spotify’s own login page lets you continue with Google, Facebook or Apple.');
   if (!spLink.connected || $('#pls').hidden) return;
   const r = await api('spotify/playlists');
   if (r.error) { list.append(h('div', { class: 's err' }, explain(r, 'Could not load your Spotify playlists'))); return; }
@@ -392,7 +416,7 @@ async function renderGg() {                                   // the YouTube Mus
   $('#ggconnect').hidden = ggLink.connected || !ggLink.hasId || !ggLink.idOk;
   $('#ggdisc').hidden = !ggLink.connected;
   $('#ggstat').textContent = setupNote('YT Music', ggLink)
-    || (ggLink.connected ? `Connected as ${ggLink.name}` : 'Not connected. Sign in with your Google account to bring over the playlists you made in YouTube Music or YouTube.');
+    || (ggLink.connected ? `Connected as ${ggLink.name}` : 'Not connected. Sign in with your Google account to bring over the playlists you made in YouTube Music or YouTube. If Google says “Access blocked”, the owner has to add your Google email as a test user first.');
   if (!ggLink.connected || $('#pls').hidden) return;
   const r = await api('google/playlists');
   if (r.error) { list.append(h('div', { class: 's err' }, explain(r, 'Could not load your playlists'))); return; }
@@ -452,15 +476,23 @@ async function syncAll(which) {
 }
 
 // the other direction: what you play on Spotify lands in the room's queue (only if you switch it on)
+async function shareTrack(t) {
+  const m = await api('spotify/match', { id: t.id, name: t.name, artist: t.artists?.[0]?.name || '', duration_ms: t.duration_ms });
+  if (m.track) { send({ t: 'add', ...trackOf(m.track) }); toast(`Added “${t.name}” from your Spotify to the room`); }
+}
 async function pollSpotifyNow() {
   if (!room || !spLink.connected || store.get('spshare') !== '1' || !spApiObj) return;
-  const r = await spApiObj.get('/me/player/currently-playing');
-  const it = r?.item;
-  if (!it || !r.is_playing || it.type === 'episode' || it.id === lastShared) return;
-  lastShared = it.id;
-  if (roomSpUris.has(it.uri)) return;                         // the room itself started this one
-  const m = await api('spotify/match', { id: it.id, name: it.name, artist: it.artists?.[0]?.name || '', duration_ms: it.duration_ms });
-  if (m.track) { send({ t: 'add', ...trackOf(m.track) }); toast(`Added “${it.name}” from your Spotify to the room`); }
+  const r = await spApiObj.get('/me/player/queue');           // the song playing now + what is queued after it
+  if (!r) return;
+  const now = r.currently_playing, q = (r.queue || []).filter(x => x && x.type !== 'episode');
+  const uris = q.map(x => x.uri), adds = queueAdds(spQueuePrev, uris); spQueuePrev = uris;   // first look = baseline only
+  const todo = [];
+  if (now && now.type !== 'episode') {
+    if (lastShared === null) lastShared = now.id;
+    else if (now.id !== lastShared) { lastShared = now.id; if (!roomSpUris.has(now.uri)) todo.push(now); }   // not a song the room itself started
+  }
+  for (const u of adds) { const t = q.find(x => x.uri === u); if (t) todo.push(t); }                       // songs queued in Spotify
+  for (const t of todo) await shareTrack(t);
 }
 setInterval(() => { pollSpotifyNow().catch(() => {}); }, 7000);
 
@@ -510,7 +542,7 @@ function setTab(t) {
   $('.tabsarea').dataset.tab = t;
   document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   if (t === 'pls') loadMiniPls();
-  if (t === 'lyrics') { renderLyrics(); }
+  if (t === 'lyrics') { renderLyrics(); stage.start(); } else if (!$('#lstage').classList.contains('full')) stage.stop();
   clearInterval(peopleTimer);
   if (t === 'people') { loadPeople(); peopleTimer = setInterval(loadPeople, 8000); }
 }
@@ -737,7 +769,7 @@ function wire() {
     try { await navigator.clipboard.writeText(link); toast('Invite link copied'); }
     catch { toast(link); }
   });
-  on('tap', 'click', async () => { await yt?.resume?.(); $('#tap').hidden = true; });
+  on('tap', 'click', async () => { await yt?.resume?.(); spot?.activate?.(); $('#tap').hidden = true; });
   on('screen', 'click', () => {                                    // laptop: click the record to make it bigger
     if (matchMedia('(max-width:700px)').matches) return;
     document.body.classList.toggle('bigdisc');
@@ -754,13 +786,13 @@ function wire() {
     if (r.error) { toast('Could not save the lyrics'); return; }
     const parsed = parseLrc(text);
     lyrCache.set(t.tid, parsed); $('#lyrta').value = '';
-    curLyr = parsed; vinyl.setLyrics(parsed); lastLyrI = -1; $('#lyrstat').textContent = '♪ Lyrics added by you';
+    curLyr = parsed; vinyl.setLyrics(parsed); stage.setLyrics(parsed); lastLyrI = -1; $('#lyrstat').textContent = '♪ Lyrics added by you';
     renderLyrics(); toast('Saved — everyone gets these lyrics now');
   });
   on('spdisc', 'click', async () => { await api('spotify/disconnect', {}); spot = null; spApiObj = null; loadLinks(); });
   on('ggdisc', 'click', async () => { await api('google/disconnect', {}); loadLinks(); });
   on('spshare', 'change', e => {
-    store.set('spshare', e.target.checked ? '1' : '0'); lastShared = '';
+    store.set('spshare', e.target.checked ? '1' : '0'); lastShared = null; spQueuePrev = null;
     toast(e.target.checked ? 'Songs you play on Spotify will be added to the room queue' : 'Sharing off');
   });
   for (const [id, prov] of [['cSpotify', 'spotify'], ['cGoogle', 'google'], ['spconnect', 'spotify'], ['ggconnect', 'google']]) on(id, 'click', e => connectClick(e, prov));
@@ -776,8 +808,16 @@ function wire() {
   });
   on('spplay', 'change', e => {
     store.set('spplay', e.target.checked ? '1' : '0');
-    if (e.target.checked) { setupSpot(); warnedSp = false; toast('Open the Spotify app on this device before the next song'); }
+    if (e.target.checked) { setupSpot(); warnedSp = false; toast(spWhere() === 'browser' ? 'Spotify songs will play in this browser' : 'Open the Spotify app on this device before the next song'); }
   });
+  on('spwhere', 'change', e => { store.set('spwhere', e.target.value); setupSpot(); });
+  on('lyrfull', 'click', () => {                                   // the lyric video, full screen
+    const el = $('#lstage'), full = el.classList.toggle('full');
+    $('#lyrfull').textContent = full ? '✕ Close' : '⛶ Full screen';
+    stage.fit(); setTimeout(() => stage.fit(), 50);
+    if (full) stage.start(); else if (tab !== 'lyrics') stage.stop();
+  });
+  addEventListener('keydown', e => { if (e.key === 'Escape' && $('#lstage').classList.contains('full')) $('#lyrfull').click(); });
   document.querySelectorAll('.tabbtn').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
   matchMedia('(min-width:1050px)').addEventListener?.('change', () => setTab(tab));
 
@@ -841,12 +881,23 @@ function wire() {
 
 async function init() {
   wire();
+  stage = createStage($('#lyrcanvas'), { time: () => songMs() + lyrOff(), playing: () => !!S.playing && !S.paused });
+  shapeId = store.get('shape') || 'pixel';
+  const sbox = $('#shapes');
+  for (const sh of SHAPES) {
+    sbox.append(h('button', { class: 'shp' + (sh.id === shapeId ? ' on' : ''), title: sh.name, 'data-shape': sh.id, onclick: () => {
+      shapeId = sh.id; store.set('shape', sh.id);
+      sbox.querySelectorAll('.shp').forEach(b => b.classList.toggle('on', b.dataset.shape === sh.id));
+    } }, h('i', { class: sh.id })));
+  }
   vinyl = createVinyl($('#vinyl'), $('#vinylhi'), {
     time: songMs,
     offset: lyrOff,
     playing: () => !!S.playing && !S.paused && serverNow() >= S.goAt,
     spin: () => spinLyr,
-    big: () => document.body.classList.contains('bigdisc')
+    big: () => document.body.classList.contains('bigdisc'),
+    shape: () => shapeId,
+    onCover: c => stage.setCover(c)
   });
   const r = await fetch('/api/me');
   if (r.status === 401) { show('login'); return; }

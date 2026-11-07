@@ -8,7 +8,7 @@ import { ensureTarget, addTracks } from './libsync.js';
 const json = (d, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { 'content-type': 'application/json' } });
 const enc = new TextEncoder();
 const b64 = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const SCOPES = 'playlist-read-private playlist-read-collaborative user-library-read user-read-playback-state user-modify-playback-state user-read-currently-playing';
+const SCOPES = 'playlist-read-private playlist-read-collaborative user-library-read user-read-playback-state user-modify-playback-state user-read-currently-playing streaming user-read-email user-read-private';
 const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const redirectUri = req => new URL('/auth/spotify/callback', req.url).href;
 const back = (req, why) => new Response(null, { status: 302, headers: { location: new URL('/?sp=' + why, req.url).href } });
@@ -24,6 +24,7 @@ export async function spLogin(req, env, me) {
     client_id: env.SPOTIFY_CLIENT_ID, response_type: 'code', redirect_uri: redirectUri(req),
     code_challenge_method: 'S256', code_challenge: ch, state, scope: SCOPES
   });
+  if (new URL(req.url).searchParams.has('switch')) q.set('show_dialog', 'true');   // lets the person pick another Spotify account
   return new Response(null, { status: 302, headers: { location: 'https://accounts.spotify.com/authorize?' + q } });
 }
 
@@ -111,7 +112,7 @@ export async function spotifyApi(req, env, me, p) {
   if (p === '/api/spotify/status') {
     const l = await link();
     // a real Spotify Client ID is 32 letters/numbers: catches a wrong value pasted as the secret
-    return json({ hasId: !!env.SPOTIFY_CLIENT_ID, idOk: /^[a-f0-9]{32}$/i.test(env.SPOTIFY_CLIENT_ID || ''), connected: !!l, name: l?.name || null });
+    return json({ hasId: !!env.SPOTIFY_CLIENT_ID, idOk: /^[a-f0-9]{32}$/i.test(env.SPOTIFY_CLIENT_ID || ''), connected: !!l, name: l?.name || null, spid: l?.ext_id || null });
   }
   if (p === '/api/spotify/disconnect' && post) {
     await env.DB.prepare("DELETE FROM links WHERE member=? AND provider='spotify'").bind(me.id).run();

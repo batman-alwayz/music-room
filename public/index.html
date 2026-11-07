@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0c0d10">
 <link rel="manifest" href="/manifest.json">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Pacifico&family=Poppins:wght@700;800&display=swap">
 <style>
   html{background:#0c0d10;color:#e9ebee;font:14px Inter,system-ui}
   body{margin:0;padding:env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 160px)}
@@ -75,6 +77,19 @@
   input[type=range]:disabled{opacity:.4;cursor:default}
   input[type=checkbox]{width:auto;margin:0 6px 0 0}
   textarea{width:100%;box-sizing:border-box;min-height:120px;background:#14161a;color:inherit;border:1px solid #1a1d22;border-radius:9px;padding:10px;font:inherit;margin:6px 0}
+  .lstage{position:relative;width:100%;aspect-ratio:16/10;border-radius:14px;overflow:hidden;background:#140a14;margin-bottom:10px}
+  .lstage canvas{width:100%;height:100%;display:block}
+  .lstage .lfull{position:absolute;right:10px;bottom:10px;background:#0008;color:#fff;border:0;border-radius:99px;padding:7px 12px;font:inherit;font-size:12px;cursor:pointer}
+  .lstage.full{position:fixed;inset:0;z-index:40;border-radius:0;aspect-ratio:auto;margin:0}
+  #shapes{display:flex;gap:8px;justify-content:center;padding:4px 0 2px}
+  .shp{width:34px;height:34px;border:2px solid #2a2f3a;border-radius:10px;background:#14161a;display:grid;place-items:center;cursor:pointer;padding:0}
+  .shp.on{border-color:#5ff3ff}
+  .shp i{display:block;width:17px;height:17px;background:#6aa8e8}
+  .shp i.circle{border-radius:50%}.shp i.pixel{clip-path:polygon(30% 0,70% 0,70% 10%,90% 10%,90% 30%,100% 30%,100% 70%,90% 70%,90% 90%,70% 90%,70% 100%,30% 100%,30% 90%,10% 90%,10% 70%,0 70%,0 30%,10% 30%,10% 10%,30% 10%)}
+  .shp i.diamond{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
+  .shp i.hexagon{clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%)}
+  .shp i.octagon{clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}
+  .shp i.square{border-radius:4px}
   #lyrlist{position:relative;max-height:58vh;overflow:auto;padding:6px 2px}
   .lyrline{padding:7px 0;color:#6b7280;font-size:16px;line-height:1.35;transition:color .2s,font-size .2s}
   .lyrline.on{color:#8ffcff;font-size:21px;font-weight:600}
@@ -166,6 +181,7 @@
       </div>
       <div id="seekrow"><span id="tcur">0:00</span><input id="seek" type="range" min="0" max="1000" value="0" step="1" disabled style="flex:1"><span id="tdur">0:00</span></div>
       <div id="lyrstat" class="s" style="text-align:center"></div>
+      <div id="shapes"></div>
       <div id="np"></div>
       <div id="ctl"></div>
       <div id="armbar"></div>
@@ -193,6 +209,7 @@
       </div>
 
       <div id="tab-lyrics" class="tabpanel">
+        <div class="lstage" id="lstage"><canvas id="lyrcanvas"></canvas><button id="lyrfull" class="lfull">⛶ Full screen</button></div>
         <div id="lyrctl" class="row" hidden style="border:0;gap:6px;flex-wrap:wrap">
           <span id="lyrinfo" class="s" style="flex:1"></span>
           <button id="lyrm" class="btn ghost small">Lyrics later</button>
@@ -243,10 +260,12 @@
         <div id="spstat" class="s"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
           <a id="spconnect" class="btn" href="/auth/spotify/login" hidden>Connect Spotify</a>
+          <a id="spswitch" class="btn ghost" href="/auth/spotify/login?switch=1" hidden>Use a different Spotify account</a>
           <button id="spdisc" class="btn ghost" hidden>Disconnect</button>
         </div>
         <label id="spplayrow" class="s" hidden style="display:block;margin-top:8px"><input type="checkbox" id="spplay">Play the room's songs on my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
-        <label id="spsharerow" class="s" hidden style="display:block;margin-top:6px"><input type="checkbox" id="spshare">Add songs I play on Spotify to the room queue (the room can see what you play)</label>
+        <label id="spwhererow" class="s" hidden style="display:block;margin-top:6px">Play Spotify songs: <select id="spwhere" style="background:#14161a;color:inherit;border:1px solid #2a2f3a;border-radius:8px;padding:6px"><option value="browser">in this browser (recommended, no app needed)</option><option value="app">in my Spotify app (laptop or phone)</option></select></label>
+        <label id="spsharerow" class="s" hidden style="display:block;margin-top:6px"><input type="checkbox" id="spshare">Add songs I play or queue on Spotify to the room queue (the room can see what you play)</label>
         <div id="splist"></div>
       </div>
       <div class="card" id="ggcard">
