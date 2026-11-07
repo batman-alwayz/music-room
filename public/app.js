@@ -291,6 +291,12 @@ function paintDrift(d) {
 // ---------- lyrics ----------
 async function loadLyrics(t) {
   const say = (tid, msg) => { if (S.playing?.tid === tid) $('#lyrstat').textContent = msg; };
+  if (spotifyPlayback()) {
+    curLyr = null; vinyl.setLyrics(null); stage.setLyrics(null);
+    say(t.tid, '♪ Lyrics are unavailable while Spotify playback is active');
+    renderLyrics();
+    return;
+  }
   const label = l => !l ? '♪ No lyrics found for this song' : l.synced ? '♪ Synced lyrics' : '♪ Lyrics (not timed, spread over the song)';
   const show1 = l => {
     curLyr = l;
@@ -316,6 +322,12 @@ const lyrOff = () => +(store.get('lo:' + (S.playing?.tid || '')) || 0);      // 
 function renderLyrics() {
   const box = $('#lyrlist'); box.replaceChildren();
   const t = S.playing;
+  if (spotifyPlayback()) {
+    $('#lyrctl').hidden = true;
+    $('#lyrpaste').hidden = true;
+    box.append(h('div', { class: 's' }, 'Lyrics are unavailable while Spotify playback is active'));
+    return;
+  }
   $('#lyrctl').hidden = spotifyPlayback() || !curLyr?.synced;
   $('#lyrpaste').hidden = !t || !!curLyr || $('#lyrstat').textContent.includes('Loading');
   $('#lyrinfo').textContent = `Timing nudge: ${lyrOff() >= 0 ? '+' : ''}${(lyrOff() / 1000).toFixed(1)}s`;
