@@ -48,23 +48,41 @@ export const connect = api => {
     return device;
   };
   const q = () => `device_id=${device}`;
+  let cached = null, cachedAt = 0;
+  const read = async (force = false) => {
+    if (!force && cached && Date.now() - cachedAt < 1800) return cached;
+    cached = await api.get('/me/player');
+    cachedAt = Date.now();
+    if (cached?.device?.id) device = cached.device.id;
+    return cached;
+  };
+  const snapshot = s => s ? ({
+    trackId: s.item?.id || null, uri: s.item?.uri || null,
+    paused: !s.is_playing, position: Number(s.progress_ms) || 0,
+    duration: Number(s.item?.duration_ms) || 0,
+    timestamp: Number(s.timestamp) || 0, source: 'api'
+  }) : null;
   return {
     ready: async () => !!(await pick()),                     // false = open the Spotify app first
+    state: async () => snapshot(await read(true)),
     position: async () => {
-      const s = await api.get('/me/player');
-      if (!s || s.progress_ms == null || !s.is_playing) return null;
-      return s.progress_ms + (s.timestamp ? Math.min(5000, Math.max(0, Date.now() - s.timestamp)) : 0);
+      const s = await read();
+      if (!s || s.progress_ms == null) return null;
+      return s.progress_ms + (s.is_playing && s.timestamp ? Math.min(5000, Math.max(0, Date.now() - s.timestamp)) : 0);
     },
-    seek: ms => device && api.put(`/me/player/seek?position_ms=${Math.round(ms)}&${q()}`),
+    seek: ms => api.put(`/me/player/seek?position_ms=${Math.round(ms)}`),
     play: async (uri, ms) => {
-      if (!device) await pick();
-      return api.put(`/me/player/play?${q()}`, { uris: [uri], position_ms: Math.round(ms) });   // { ok, status, reason, message }
+      const current = await read(true);
+      if (!current?.device?.id && !device) await pick();
+      const target = current?.device?.id || device;
+      const path = target ? `/me/player/play?device_id=${target}` : '/me/player/play';
+      return api.put(path, { uris: [uri], position_ms: Math.round(ms) });   // { ok, status, reason, message }
     },
-    pause: () => device && api.put(`/me/player/pause?${q()}`),
+    pause: () => api.put('/me/player/pause'),
     setMuted: async m => {                                   // Spotify has no mute: use volume, and put it back after
       if (!device) return;
       if (m) {
-        const s = await api.get('/me/player');
+        const s = await read(true);
         const v = s?.device?.volume_percent;
         if (prevVol == null && v > 0) prevVol = v;
         await api.put(`/me/player/volume?volume_percent=0&${q()}`);
@@ -74,7 +92,7 @@ export const connect = api => {
       let last = 0, seen = false;
       clearInterval(timer);
       timer = setInterval(async () => {
-        const s = await api.get('/me/player');
+        const s = await read();
         if (!s) return;
         if (s.is_playing) { seen = true; last = s.progress_ms; return; }
         if (seen && last >= dur - 4000) { clearInterval(timer); res(); }
@@ -97,7 +115,7 @@ export function whyNot(res, name) {
 }
 
 // Spotify's own player inside this browser tab (Premium). No Spotify app needed, and the position is read locally.
-export function sdkConnect(api, getToken, onAutoplay) {
+export function sdkConnect(api, getToken, onAutoplay, onState) {
   let player = null, device = null, err = null, vol = 0.8, timer = null, booting = null;
   const load = () => new Promise((res, rej) => {
     if (window.Spotify?.Player) return res();
@@ -113,6 +131,15 @@ export function sdkConnect(api, getToken, onAutoplay) {
       let done = false; const fin = v => { if (!done) { done = true; res(v); } };
       player.addListener('ready', e => { device = e.device_id; fin(true); });
       player.addListener('not_ready', () => { device = null; });
+      player.addListener('player_state_changed', s => {
+        const t = s?.track_window?.current_track;
+        if (!s || !t) { onState?.(null); return; }
+        onState?.({
+          trackId: t.id || null, uri: t.uri || null, paused: !!s.paused,
+          position: Number(s.position) || 0, duration: Number(s.duration) || 0,
+          timestamp: 0, source: 'sdk'
+        });
+      });
       for (const k of ['initialization_error', 'authentication_error', 'account_error', 'playback_error'])
         player.addListener(k, e => { err = { kind: k, message: e?.message }; if (k !== 'playback_error') fin(false); });
       player.addListener('autoplay_failed', () => { err = { kind: 'autoplay_failed' }; onAutoplay?.(); });
@@ -125,14 +152,26 @@ export function sdkConnect(api, getToken, onAutoplay) {
     error: () => err,
     activate: () => player?.activateElement?.(),
     disconnect: () => player?.disconnect?.(),
-    position: async () => { const s = await player?.getCurrentState?.(); return !s || s.paused ? null : s.position; },
-    seek: ms => player?.seek?.(Math.round(ms)),
+    state: async () => {
+      const s = await api.get('/me/player');
+      if (!s) return null;
+      return {
+        trackId: s.item?.id || null, uri: s.item?.uri || null,
+        paused: !s.is_playing, position: Number(s.progress_ms) || 0,
+        duration: Number(s.item?.duration_ms) || 0,
+        timestamp: Number(s.timestamp) || 0, source: 'api'
+      };
+    },
+    position: async () => { const s = await player?.getCurrentState?.(); return !s ? null : s.position; },
+    seek: ms => api.put(`/me/player/seek?position_ms=${Math.round(ms)}`),
     play: async (uri, ms) => {
-      const r = await api.put(`/me/player/play?device_id=${device}`, { uris: [uri], position_ms: Math.round(ms) });
+      const current = await api.get('/me/player');
+      const target = current?.device?.id || device;
+      const r = await api.put(`/me/player/play?device_id=${target}`, { uris: [uri], position_ms: Math.round(ms) });
       if (!r.ok && !r.reason && err?.kind === 'account_error') return { ...r, reason: 'PREMIUM_REQUIRED', message: err.message };
       return r;
     },
-    pause: () => player?.pause?.(),
+    pause: () => api.put('/me/player/pause'),
     setMuted: m => { vol = m ? 0 : 0.8; return player?.setVolume?.(vol); },
     end: dur => new Promise(res => {                         // only after we saw it playing near the end and then stop
       let last = 0, seen = false;
