@@ -70,18 +70,15 @@ export const connect = api => {
       if (!s || s.progress_ms == null) return null;
       return s.progress_ms + (s.is_playing && s.timestamp ? Math.min(5000, Math.max(0, Date.now() - s.timestamp)) : 0);
     },
-    seek: async ms => {
-      if (!device) await pick();
-      return device && api.put(`/me/player/seek?position_ms=${Math.round(ms)}&${q()}`);
-    },
+    seek: ms => api.put(`/me/player/seek?position_ms=${Math.round(ms)}`),
     play: async (uri, ms) => {
-      if (!device) await pick();
-      return api.put(`/me/player/play?${q()}`, { uris: [uri], position_ms: Math.round(ms) });   // { ok, status, reason, message }
+      const current = await read(true);
+      if (!current?.device?.id && !device) await pick();
+      const target = current?.device?.id || device;
+      const path = target ? `/me/player/play?device_id=${target}` : '/me/player/play';
+      return api.put(path, { uris: [uri], position_ms: Math.round(ms) });   // { ok, status, reason, message }
     },
-    pause: async () => {
-      if (!device) await pick();
-      return device && api.put(`/me/player/pause?${q()}`);
-    },
+    pause: () => api.put('/me/player/pause'),
     setMuted: async m => {                                   // Spotify has no mute: use volume, and put it back after
       if (!device) return;
       if (m) {
