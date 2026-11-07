@@ -99,6 +99,8 @@ const explain = (r, fallback) =>
 
 function show(name) {
   for (const id of ['login', 'connect', 'lobby', 'room', 'pls']) $('#' + id).hidden = id !== name;
+  $('#mobileNav').hidden = name !== 'room';
+  if (name !== 'room') $('#designPanel').hidden = true;
   $('#webwrap').style.visibility = name === 'room' ? 'visible' : 'hidden';
   if (vinyl) { if (name === 'room') vinyl.start(); else vinyl.stop(); }
 }
@@ -664,6 +666,7 @@ function setTab(t) {
   tab = t;
   $('.tabsarea').dataset.tab = t;
   document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  document.querySelectorAll('[data-mobile-tab]').forEach(b => b.classList.toggle('on', b.dataset.mobileTab === t));
   if (t === 'pls') loadMiniPls();
   if (t === 'lyrics') { renderLyrics(); stage.start(); } else if (!$('#lstage').classList.contains('full')) stage.stop();
   clearInterval(peopleTimer);
