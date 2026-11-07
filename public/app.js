@@ -274,7 +274,10 @@ async function begin() {
       player = p = yt; await yt.play(t.yt_id || t.tid, late);
     }
     Promise.resolve(p.setMuted?.(muted)).catch(() => {});
-    if (p === spot) { send({ t: 'live', v: true }); roomSpUris.add(id); }
+    if (p === spot) {
+      send({ t: 'live', v: true }); roomSpUris.add(id);
+      try { await observeSpotifyState(await spot.state()); } catch {}
+    }
     if (token !== playToken) return;
     loop = startLoop(p, () => S, paintDrift);
     p.end(t.dur * 1000).then(() => { if (token === playToken) send({ t: 'ended', seq }); });
