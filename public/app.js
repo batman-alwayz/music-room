@@ -18,6 +18,7 @@ let S = fresh();
 let me, player, yt, spot = null, spApiObj = null, vinyl, loop, ws, ready = false, room = null;
 let spLink = { connected: false, hasId: false }, spTok = null, spExp = 0, warnedSp = false;
 let curLyr = null, lastLyrI = -1, seekDrag = false;
+let spotifyPos = null, spotifyPosAt = 0, spotifyPosBusy = false;
 let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null;
 let stage = null, spotKind = '', shapeId = 'pixel';
 const roomSpUris = new Set();
@@ -194,6 +195,7 @@ function onFrame({ s, now }) {
   S = s;
   if ((S.playing?.tid || null) !== lastVinylTid) {           // new song on the record
     lastVinylTid = S.playing?.tid || null;
+    spotifyPos = null; spotifyPosAt = 0;
     vinyl.setTrack(S.playing); stage.setTrack(S.playing); stage.setLyrics(null);
     curLyr = null; lastLyrI = -1; renderLyrics();
     if (S.playing) loadLyrics(S.playing);
@@ -249,6 +251,13 @@ async function begin() {
     if (token !== playToken) return;
     const late = Math.max(0, serverNow() - S.startAt);
     player = p;
+    spotifyPos = null; spotifyPosAt = 0;
+    if (p === spot) {
+      vinyl.setLyrics(null);
+      stage.setLyrics(null);
+      $('#lyrstat').textContent = '♪ Lyrics shown without timing during Spotify playback';
+      renderLyrics();
+    }
     const res = await p.play(id, late);
     if (p === spot && !(res && res.ok)) {                    // Spotify said no: tell the person exactly why, then use YouTube
       if (res?.reason === 'PREMIUM_REQUIRED') store.set('spplay', '0');
@@ -283,7 +292,15 @@ function paintDrift(d) {
 async function loadLyrics(t) {
   const say = (tid, msg) => { if (S.playing?.tid === tid) $('#lyrstat').textContent = msg; };
   const label = l => !l ? '♪ No lyrics found for this song' : l.synced ? '♪ Synced lyrics' : '♪ Lyrics (not timed, spread over the song)';
-  const show1 = l => { curLyr = l; vinyl.setLyrics(l); stage.setLyrics(l); lastLyrI = -1; say(t.tid, label(l)); renderLyrics(); };
+  const show1 = l => {
+    curLyr = l;
+    const spotify = spotifyPlayback();
+    vinyl.setLyrics(spotify ? null : l);
+    stage.setLyrics(spotify ? null : l);
+    lastLyrI = -1;
+    say(t.tid, spotify ? '♪ Lyrics shown without timing during Spotify playback' : label(l));
+    renderLyrics();
+  };
   if (lyrCache.has(t.tid)) { if (S.playing?.tid === t.tid) show1(lyrCache.get(t.tid)); return; }
   vinyl.setLyrics(null); say(t.tid, '♪ Loading lyrics…');
   const r = await api('lyrics?' + new URLSearchParams({ tid: t.tid, title: t.title, artist: t.artist || '', dur: String(t.dur) }));
@@ -299,7 +316,7 @@ const lyrOff = () => +(store.get('lo:' + (S.playing?.tid || '')) || 0);      // 
 function renderLyrics() {
   const box = $('#lyrlist'); box.replaceChildren();
   const t = S.playing;
-  $('#lyrctl').hidden = !curLyr?.synced;
+  $('#lyrctl').hidden = spotifyPlayback() || !curLyr?.synced;
   $('#lyrpaste').hidden = !t || !!curLyr || $('#lyrstat').textContent.includes('Loading');
   $('#lyrinfo').textContent = `Timing nudge: ${lyrOff() >= 0 ? '+' : ''}${(lyrOff() / 1000).toFixed(1)}s`;
   if (!t) { box.append(h('div', { class: 's' }, 'Play a song to see its lyrics here')); return; }
@@ -308,7 +325,7 @@ function renderLyrics() {
   tickLyrics(true);
 }
 function tickLyrics(force) {
-  if (!curLyr?.synced || !S.playing) return;
+  if (spotifyPlayback() || !curLyr?.synced || !S.playing) return;
   const i = lineIndex(curLyr, songMs() + lyrOff());
   if (i === lastLyrI && !force) return;
   lastLyrI = i;
@@ -323,11 +340,31 @@ function nudge(d) { if (!S.playing) return; store.set('lo:' + S.playing.tid, Str
 
 // ---------- the sound bar ----------
 const fmt = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-function tickSeek() {
+async function tickSeek() {
   const el = $('#seek'), t = S.playing;
   el.disabled = !t;
   if (!t) { el.value = 0; $('#tcur').textContent = '0:00'; $('#tdur').textContent = '0:00'; return; }
-  const ms = Math.max(0, Math.min(songMs(), t.dur * 1000));
+
+  let position = songMs();
+  if (spotifyPlayback() && spot?.position) {
+    const pollEvery = spotKind === 'browser' ? 500 : 1200;
+    if (!spotifyPosBusy && Date.now() - spotifyPosAt >= pollEvery) {
+      spotifyPosBusy = true;
+      try {
+        const p = await spot.position();
+        spotifyPos = Number.isFinite(p) ? p : null;
+        spotifyPosAt = Date.now();
+      } catch {
+        spotifyPos = null;
+        spotifyPosAt = Date.now();
+      } finally {
+        spotifyPosBusy = false;
+      }
+    }
+    if (spotifyPos != null) position = spotifyPos;
+  }
+
+  const ms = Math.max(0, Math.min(position, t.dur * 1000));
   $('#tdur').textContent = fmt(t.dur * 1000);
   if (!seekDrag) { el.value = Math.round(ms / (t.dur * 1000) * 1000); $('#tcur').textContent = fmt(ms); }
 }
@@ -335,6 +372,7 @@ setInterval(() => { if (!room || !me) return; tickSeek(); tickLyrics(); }, 250);
 
 // ---------- Accounts: Spotify + YouTube Music (Google) ----------
 const spOn = () => spLink.connected && store.get('spplay') !== '0';       // on by default once connected
+const spotifyPlayback = () => spOn() && player === spot;
 async function getSpToken(force) {
   if (!force && spTok && Date.now() < spExp - 60000) return spTok;
   const r = await api('spotify/token' + (force ? '?force=1' : ''));
