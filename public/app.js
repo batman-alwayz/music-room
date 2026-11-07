@@ -29,6 +29,41 @@ let showVid = store.get('vid') === '1', spinLyr = store.get('spin') === '1', mut
 let pls = [], openPl = null, plFrom = 'lobby', renaming = false, delArmed = false, toastT;
 const lyrCache = new Map();
 
+const DESIGN_DEFAULTS = { app: '#f5f0e8', lyrics: '#c96e50', disc: '#c96e50' };
+const colorHue = hex => {
+  const n = parseInt(String(hex).replace('#',''),16), r=((n>>16)&255)/255, g=((n>>8)&255)/255, b=(n&255)/255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b), d=max-min;
+  if (!d) return 0;
+  let h=max===r?((g-b)/d)%6:max===g?(b-r)/d+2:(r-g)/d+4;
+  return (h*60+360)%360;
+};
+function applyDesign() {
+  const colors = {
+    app: store.get('design:app') || DESIGN_DEFAULTS.app,
+    lyrics: store.get('design:lyrics') || DESIGN_DEFAULTS.lyrics,
+    disc: store.get('design:disc') || DESIGN_DEFAULTS.disc
+  };
+  const root = document.documentElement;
+  root.style.setProperty('--ui-bg', colors.app);
+  root.style.setProperty('--ui-panel', mixColor(colors.app, '#ffffff', .72));
+  root.style.setProperty('--ui-ink', '#252729');
+  root.style.setProperty('--ui-muted', mixColor(colors.app, '#252729', .56));
+  root.style.setProperty('--ui-line', mixColor(colors.app, '#252729', .12));
+  root.style.setProperty('--ui-accent', colors.lyrics);
+  root.style.setProperty('--ui-lyric', colors.lyrics);
+  root.style.setProperty('--ui-disc-hue', colorHue(colors.disc) + 'deg');
+  for (const [id,key] of [['appColor','app'],['lyricsColor','lyrics'],['discColor','disc']]) {
+    const el = $('#' + id); if (el) el.value = colors[key];
+  }
+}
+function mixColor(a,b,t) {
+  const x=parseInt(a.slice(1),16), y=parseInt(b.slice(1),16);
+  const c=[16,8,0].map(s=>Math.round(((x>>s)&255)*(1-t)+((y>>s)&255)*t).toString(16).padStart(2,'0')).join('');
+  return '#'+c;
+}
+function setDesign(key,value) { store.set('design:'+key,value); applyDesign(); }
+
+
 const $ = s => document.querySelector(s);
 const on = (id, ev, fn) => $('#' + id).addEventListener(ev, fn);
 const h = (tag, props = {}, ...kids) => {
@@ -858,6 +893,17 @@ function wire() {
     catch { toast(link); }
   });
   on('tap', 'click', async () => { await yt?.resume?.(); spot?.activate?.(); $('#tap').hidden = true; });
+  on('designOpen', 'click', () => { $('#designPanel').hidden = false; });
+  on('designClose', 'click', () => { $('#designPanel').hidden = true; });
+  on('designPanel', 'click', e => { if (e.target.id === 'designPanel') $('#designPanel').hidden = true; });
+  on('designReset', 'click', () => { for (const k of ['app','lyrics','disc']) store.set('design:'+k, DESIGN_DEFAULTS[k]); applyDesign(); toast('Colors reset'); });
+  for (const [id,key] of [['appColor','app'],['lyricsColor','lyrics'],['discColor','disc']]) {
+    on(id, 'input', e => setDesign(key, e.target.value));
+  }
+  document.querySelectorAll('[data-mobile-tab]').forEach(b => b.addEventListener('click', () => {
+    setTab(b.dataset.mobileTab);
+    document.querySelectorAll('[data-mobile-tab]').forEach(x => x.classList.toggle('on', x === b));
+  }));
   on('screen', 'click', () => {                                    // laptop: click the record to make it bigger
     if (matchMedia('(max-width:700px)').matches) return;
     document.body.classList.toggle('bigdisc');
@@ -907,6 +953,7 @@ function wire() {
   });
   addEventListener('keydown', e => { if (e.key === 'Escape' && $('#lstage').classList.contains('full')) $('#lyrfull').click(); });
   document.querySelectorAll('.tabbtn').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  document.querySelectorAll('[data-mobile-tab]').forEach(b => b.classList.toggle('on', b.dataset.mobileTab === tab));
   matchMedia('(min-width:1050px)').addEventListener?.('change', () => setTab(tab));
 
   // search: results stay on screen so you can add several songs, or all of them
@@ -968,9 +1015,10 @@ function wire() {
 }
 
 async function init() {
+  applyDesign();
   wire();
   stage = createStage($('#lyrcanvas'), { time: () => songMs() + lyrOff(), playing: () => !!S.playing && !S.paused });
-  shapeId = store.get('shape') || 'pixel';
+  shapeId = store.get('shape') || 'circle';
   const sbox = $('#shapes');
   for (const sh of SHAPES) {
     sbox.append(h('button', { class: 'shp' + (sh.id === shapeId ? ' on' : ''), title: sh.name, 'data-shape': sh.id, onclick: () => {
