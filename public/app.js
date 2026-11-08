@@ -1,7 +1,7 @@
 import { setOffset, serverNow, startLoop } from './sync.js';
 import { ytm, web, manual } from './players.js';
 import { createVinyl, parseLrc, lineIndex, SHAPES } from './vinyl.js';
-import { spApi, connect as spConnect, sdkConnect, whyNot, queueAdds, findUri } from './spotify.js';
+import { spApi, connect as spConnect, sdkConnect, whyNot, queueAdds, findUri, spCommandedRecently } from './spotify.js';
 import { createStage } from './stage.js';
 
 const QUOTA = 10;                                            // songs one person may have queued
@@ -18,7 +18,7 @@ let S = fresh();
 let me, player, yt, spot = null, spApiObj = null, vinyl, loop, ws, ready = false, room = null;
 let spLink = { connected: false, hasId: false }, spTok = null, spExp = 0, warnedSp = false;
 let curLyr = null, lastLyrI = -1, seekDrag = false;
-let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null;
+let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null, spPrev = null;
 let stage = null, spotKind = '', shapeId = 'pixel';
 const roomSpUris = new Set();
 let wantArmed = true, beganSeq = -1, beginTimer, playToken = 0, lastDrift = 0, backoff = 1000, lastArm = 0;
@@ -39,6 +39,21 @@ const h = (tag, props = {}, ...kids) => {
   }
   e.append(...kids.filter(k => k != null && k !== false));
   return e;
+};
+
+// crisp SVG transport glyphs instead of emoji (which render as chunky dated buttons)
+const ICONS = {
+  prev: '<path d="M7 5h2.9v14H7z"/><path d="M19.5 5.6v12.8L9.9 12z"/>',
+  next: '<path d="M14.1 5H17v14h-2.9z"/><path d="M4.5 5.6v12.8L14.1 12z"/>',
+  play: '<path d="M8 5.4v13.2L19 12z"/>',
+  pause: '<path d="M7.6 5h3.3v14H7.6z"/><path d="M13.1 5h3.3v14h-3.3z"/>',
+  vol: '<path d="M4 9.4v5.2h3.5L12 18.6V5.4L7.5 9.4z"/><path d="M14.6 9.2a4 4 0 010 5.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M16.8 7.2a7 7 0 010 9.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  mute: '<path d="M4 9.4v5.2h3.5L12 18.6V5.4L7.5 9.4z"/><path d="M15 9.5l5 5M20 9.5l-5 5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>'
+};
+const icon = n => {
+  const s = h('span', { class: 'ic', 'aria-hidden': 'true' });
+  s.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor">${ICONS[n]}</svg>`;   // constant strings only
+  return s;
 };
 
 async function api(path, body) {
@@ -194,6 +209,7 @@ function onFrame({ s, now }) {
   S = s;
   if ((S.playing?.tid || null) !== lastVinylTid) {           // new song on the record
     lastVinylTid = S.playing?.tid || null;
+    spPrev = null;                                          // forget the old song's Spotify position
     vinyl.setTrack(S.playing); stage.setTrack(S.playing); stage.setLyrics(null);
     curLyr = null; lastLyrI = -1; renderLyrics();
     if (S.playing) loadLyrics(S.playing);
@@ -341,7 +357,7 @@ async function getSpToken(force) {
   if (r.error) return null;
   spTok = r.token; spExp = r.exp; return spTok;
 }
-const spWhere = () => store.get('spwhere') || (hasShell() ? 'app' : 'browser');   // laptops play inside the page, the phone apps use the Spotify app
+const spWhere = () => store.get('spwhere') || 'app';        // each person's own Spotify device, not a shared/browser one
 function setupSpot() {
   if (!spApiObj) spApiObj = spApi(getSpToken);
   const want = spWhere();
@@ -407,7 +423,7 @@ async function renderSp() {                                   // the Spotify car
   list.append(h('div', { class: 's', style: 'margin-top:10px' }, 'Import (your own playlists and Liked songs):'));
   for (const p of r.items || []) {
     const btn = h('button', { class: 'btn', onclick: () => importOne2('spotify', p, btn) }, 'Import');
-    list.append(h('div', { class: 'row' }, h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name), h('div', { class: 's' }, `${p.n} song${p.n === 1 ? '' : 's'}`)), btn));
+    list.append(h('div', { class: 'row' }, h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name), h('div', { class: 's' }, `${p.n} song${p.n === 1 ? '' : 's'}${p.owned === false ? ' · followed' : ''}`)), btn));
   }
 }
 async function renderGg() {                                   // the YouTube Music card
@@ -459,13 +475,13 @@ async function syncAll(which) {
       say(`Reading your ${label} playlists…`);
       const lr = await api(`${prov}/playlists`);
       if (lr.error) { say(explain(lr, `Could not read your ${label} playlists`)); continue; }
-      const lists = (lr.items || []).filter(p => p.n > 0).slice(0, 25);
+      const lists = (lr.items || []).filter(p => p.n > 0);   // every playlist, no 25-playlist cut-off
       let i = 0;
       for (const p of lists) {
         i++;
         const r = await importOne(prov, p, n => say(`Syncing ${label}: playlist ${i}/${lists.length} “${p.name}” — ${n} songs`));
         added += r.added; skipped += r.skipped;
-        if (r.error) break;
+        if (r.error) continue;                              // one unreadable playlist must not stop the rest
       }
     }
     say(`Synced ${added} song${added === 1 ? '' : 's'} into your playlists${skipped ? ` (${skipped} not found)` : ''}. Open “My playlists” to see them.`);
@@ -495,6 +511,25 @@ async function pollSpotifyNow() {
   for (const t of todo) await shareTrack(t);
 }
 setInterval(() => { pollSpotifyNow().catch(() => {}); }, 7000);
+
+// the other direction of playback control: press play/pause or drag the bar INSIDE Spotify and the
+// room follows, so the site's button and time bar match. Edge-detect changes between polls and ignore
+// anything right after a command we sent ourselves (otherwise the room would echo its own pause/seek).
+async function syncFromSpotify() {
+  if (!room || !S.playing || player !== spot || !spot?.state) { spPrev = null; return; }
+  const st = await spot.state().catch(() => null);
+  if (!st || !roomSpUris.has(st.uri)) { spPrev = null; return; }   // only sync the song the room itself started
+  const now = Date.now();
+  if (spCommandedRecently() || !spPrev) { spPrev = { ...st, at: now }; return; }
+  if (st.playing !== spPrev.playing) {
+    send({ t: st.playing ? 'resume' : 'pause' });
+  } else if (st.playing && spPrev.playing) {
+    const expected = spPrev.position + (now - spPrev.at);
+    if (Math.abs(st.position - expected) > 3000) send({ t: 'seek', ms: st.position });   // a jump, not normal progress
+  }
+  spPrev = { ...st, at: now };
+}
+setInterval(() => { syncFromSpotify().catch(() => {}); }, 1500);
 
 // ---------- people in the room: the admin can kick, block and unblock ----------
 function confirmBtn(label, fn, cls = 'btn ghost small') {
@@ -556,24 +591,24 @@ function render() {
   const np = $('#np'); np.replaceChildren();
   if (S.playing) {
     const t = S.playing;
-    np.append(
+    np.append(...[
       h('div', { class: 't' }, t.title),
       h('div', { class: 's' }, `${t.artist} · added by ${nameOf(t.by)}`),
       h('div', { id: 'drift', class: 's' }, S.paused ? '⏸ Paused' : ''),
       !S.part?.[me.id] && h('div', { class: 's', style: 'margin-top:6px' }, 'A song is already playing — you will hear the next one. ',
         h('button', { class: 'btn', onclick: () => send({ t: 'late' }) }, 'Join this song now')),
       h('button', { class: 'btn ghost', style: 'margin-top:6px', onclick: () => pickPlaylist(trackOf(t)) }, '♪ Save to playlist')
-    );
+    ].filter(Boolean));                                    // append(false) would print the literal word "false"
   } else {
     np.append(h('div', { class: 's' }, S.queue.length ? 'Waiting for everyone to be ready…' : 'Queue is empty — search a song and add it'));
   }
 
   const votes = [S.votes.length && `skip ${S.votes.length}/${need}`, S.pvotes?.length && `back ${S.pvotes.length}/${need}`].filter(Boolean).join(' · ');
   $('#ctl').replaceChildren(...[
-    h('button', { class: 'btn', title: 'Previous (vote)', onclick: () => send({ t: 'prev' }) }, '⏮'),
-    h('button', { class: 'btn', disabled: !S.playing, title: S.paused ? 'Resume' : 'Pause', onclick: () => send({ t: S.paused ? 'resume' : 'pause' }) }, S.paused ? '▶' : '⏸'),
-    h('button', { class: 'btn', disabled: !S.playing, title: 'Skip (vote)', onclick: () => send({ t: 'skip' }) }, '⏭'),
-    h('button', { class: 'btn', title: muted ? 'Unmute' : 'Mute (only for you)', onclick: toggleMute }, muted ? '🔇' : '🔊'),
+    h('button', { class: 'tbtn', title: 'Previous (vote)', onclick: () => send({ t: 'prev' }) }, icon('prev')),
+    h('button', { class: 'tbtn primary', disabled: !S.playing, title: S.paused ? 'Resume' : 'Pause', onclick: () => send({ t: S.paused ? 'resume' : 'pause' }) }, icon(S.paused ? 'play' : 'pause')),
+    h('button', { class: 'tbtn', disabled: !S.playing, title: 'Skip (vote)', onclick: () => send({ t: 'skip' }) }, icon('next')),
+    h('button', { class: 'tbtn', title: muted ? 'Unmute' : 'Mute (only for you)', onclick: toggleMute }, icon(muted ? 'mute' : 'vol')),
     h('button', { class: 'btn ghost small', title: 'Lyrics turn with the record', onclick: () => { spinLyr = !spinLyr; store.set('spin', spinLyr ? '1' : '0'); render(); } }, spinLyr ? '↻ Lyrics spin: on' : '↻ Lyrics spin: off'),
     route() === 'web' && h('button', { class: 'btn ghost small', onclick: () => { showVid = !showVid; store.set('vid', showVid ? '1' : '0'); applyVid(); render(); } }, showVid ? '📺 Hide video' : '📺 Show video'),
     votes && h('div', { class: 's' }, votes)
@@ -658,7 +693,7 @@ async function pickPlaylist(track) {                         // bottom sheet: sa
   const close = () => { ov.hidden = true; };
   const save = async id => {
     const x = await api('playlists/' + id + '/add', { track });
-    close(); toast(x.error ? (x.error === 'limit' ? 'Playlist is full (200 songs)' : explain(x, 'Could not save')) : 'Saved to playlist');
+    close(); toast(x.error ? (x.error === 'limit' ? 'Playlist is full (10000 songs)' : explain(x, 'Could not save')) : 'Saved to playlist');
   };
   const nameIn = h('input', { placeholder: 'New playlist name', maxlength: '30' });
   const err = h('div', { class: 's err' });

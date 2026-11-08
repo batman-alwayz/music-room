@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0c0d10">
 <link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Pacifico&family=Poppins:wght@700;800&display=swap">
 <style>
@@ -105,6 +107,20 @@
   #ctl{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;padding:6px 0}
   #ctl .btn{font-size:18px;min-width:48px}
   #ctl .btn.small{font-size:13px;min-width:0}
+  /* modern circular transport controls */
+  #ctl{gap:14px}
+  .tbtn{width:50px;height:50px;border-radius:50%;border:1px solid #262b33;background:#161a1f;color:#cfd4db;
+        display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
+        transition:transform .12s,background .12s,border-color .12s}
+  .tbtn:hover:not(:disabled){background:#1d222a;border-color:#333a45;transform:translateY(-1px)}
+  .tbtn:active:not(:disabled){transform:scale(.94)}
+  .tbtn:disabled{opacity:.35;cursor:default}
+  .tbtn .ic{width:22px;height:22px;display:block}
+  .tbtn .ic svg{width:100%;height:100%;display:block}
+  .tbtn.primary{width:64px;height:64px;border-color:transparent;color:#062028;
+        background:linear-gradient(145deg,#7ff7ff,#38d4ff);box-shadow:0 6px 18px #38d4ff33}
+  .tbtn.primary .ic{width:26px;height:26px}
+  .tbtn.primary:hover:not(:disabled){background:linear-gradient(145deg,#93f9ff,#4fdcff)}
   #armbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;padding:6px 0}
   .chips{display:flex;gap:6px;flex-wrap:wrap}.chip{background:#1a1d22;border-radius:99px;padding:3px 9px;font-size:12px}
 
@@ -264,7 +280,7 @@
           <button id="spdisc" class="btn ghost" hidden>Disconnect</button>
         </div>
         <label id="spplayrow" class="s" hidden style="display:block;margin-top:8px"><input type="checkbox" id="spplay">Play the room's songs on my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
-        <label id="spwhererow" class="s" hidden style="display:block;margin-top:6px">Play Spotify songs: <select id="spwhere" style="background:#14161a;color:inherit;border:1px solid #2a2f3a;border-radius:8px;padding:6px"><option value="browser">in this browser (recommended, no app needed)</option><option value="app">in my Spotify app (laptop or phone)</option></select></label>
+        <label id="spwhererow" class="s" hidden style="display:block;margin-top:6px">Play Spotify songs: <select id="spwhere" style="background:#14161a;color:inherit;border:1px solid #2a2f3a;border-radius:8px;padding:6px"><option value="app">in my Spotify app on this device (recommended)</option><option value="browser">in this browser (no app needed)</option></select></label>
         <label id="spsharerow" class="s" hidden style="display:block;margin-top:6px"><input type="checkbox" id="spshare">Add songs I play or queue on Spotify to the room queue (the room can see what you play)</label>
         <div id="splist"></div>
       </div>

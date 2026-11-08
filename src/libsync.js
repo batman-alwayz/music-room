@@ -1,4 +1,7 @@
 // Shared by the Spotify and Google/YouTube importers: find-or-create the target playlist, add songs in order.
+export const MAX_PLAYLISTS = 200;                          // per person
+export const MAX_TRACKS = 10000;                           // per playlist: big libraries (4000+) must fit whole
+
 export async function ensureTarget(env, me, name, target) {
   name = String(name || 'Imported').trim().slice(0, 30) || 'Imported';
   if (target) {
@@ -8,16 +11,16 @@ export async function ensureTarget(env, me, name, target) {
   const ex = await env.DB.prepare('SELECT id FROM playlists WHERE owner=? AND name=?').bind(me.id, name).first();
   if (ex) return { target: ex.id, name };
   const c = await env.DB.prepare('SELECT COUNT(*) n FROM playlists WHERE owner=?').bind(me.id).first();
-  if (c.n >= 30) return { error: 'limit', status: 409 };
+  if (c.n >= MAX_PLAYLISTS) return { error: 'limit', status: 409 };
   const id = crypto.randomUUID().slice(0, 8);
   await env.DB.prepare('INSERT INTO playlists (id,owner,name,created) VALUES (?,?,?,?)').bind(id, me.id, name, Date.now()).run();
   return { target: id, name };
 }
 
-// tracks: [{ tid, title, artist, dur, cover } | null]; returns how many were added and how much room is left (200 per playlist)
+// tracks: [{ tid, title, artist, dur, cover } | null]; returns how many were added and how much room is left
 export async function addTracks(env, target, tracks) {
   const c = await env.DB.prepare('SELECT COUNT(*) n, COALESCE(MAX(pos),0) m FROM playlist_tracks WHERE playlist=?').bind(target).first();
-  let pos = c.m, room = 200 - c.n, added = 0;
+  let pos = c.m, room = MAX_TRACKS - c.n, added = 0;
   for (const m of tracks) {
     if (!m || room <= 0) continue;
     await env.DB.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist,tid,title,artist,dur,cover,pos) VALUES (?,?,?,?,?,?,?)')

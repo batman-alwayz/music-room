@@ -68,7 +68,7 @@ export async function spToken(env, memberId, force = false) {
 async function spGet(env, memberId, path) {
   let t = await spToken(env, memberId);
   if (!t) return { status: 401 };
-  const go = tok => fetch('https://api.spotify.com/v1' + path, { headers: { authorization: 'Bearer ' + tok } });
+  const go = tok => fetch(path.startsWith('http') ? path : 'https://api.spotify.com/v1' + path, { headers: { authorization: 'Bearer ' + tok } });
   let r = await go(t.token);
   if (r.status === 401) { t = await spToken(env, memberId, true); if (!t) return { status: 401 }; r = await go(t.token); }
   return { status: r.status, data: r.ok ? await r.json().catch(() => null) : null, link: t.link };
@@ -123,13 +123,22 @@ export async function spotifyApi(req, env, me, p) {
     return t ? json({ token: t.token, exp: t.exp }) : json({ error: 'nolink' }, 404);
   }
 
-  if (p === '/api/spotify/playlists') {                   // Spotify only shares the contents of playlists YOU own
-    const r = await spGet(env, me.id, '/me/playlists?limit=50');
-    if (!r.data) return json({ error: 'spotify', status: r.status }, 502);
-    const mine = (r.data.items || []).filter(x => x && x.owner?.id === r.link.ext_id)
-      .map(x => ({ id: x.id, name: x.name, n: x.items?.total ?? x.tracks?.total ?? 0 }));
+  if (p === '/api/spotify/playlists') {                   // every playlist: owned, followed and collaborative
+    const all = [];
+    let path = '/me/playlists?limit=50', extId = null;
+    for (let page = 0; path && page < 40; page++) {        // follow Spotify's `next` until exhausted
+      const r = await spGet(env, me.id, path);
+      if (!r.data) { if (!all.length) return json({ error: 'spotify', status: r.status }, 502); break; }
+      extId = r.link?.ext_id || extId;
+      all.push(...(r.data.items || []).filter(Boolean));
+      path = r.data.next;
+    }
+    const lists = all.map(x => ({
+      id: x.id, name: x.name, n: x.items?.total ?? x.tracks?.total ?? 0,
+      owned: x.owner?.id === extId
+    }));
     const liked = await spGet(env, me.id, '/me/tracks?limit=1');
-    return json({ items: [{ id: 'liked', name: 'Liked songs', n: liked.data?.total ?? 0 }, ...mine] });
+    return json({ items: [{ id: 'liked', name: 'Liked songs', n: liked.data?.total ?? 0, owned: true }, ...lists] });
   }
 
   if (p === '/api/spotify/match' && post) {               // "I'm playing this on Spotify" -> the YouTube version for the room

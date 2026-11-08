@@ -1,4 +1,5 @@
 // Per-person playlists (they follow you into any room).
+import { MAX_PLAYLISTS, MAX_TRACKS } from './libsync.js';
 const json = (d, s = 200) => new Response(JSON.stringify(d), {
   status: s, headers: { 'content-type': 'application/json' }
 });
@@ -18,7 +19,7 @@ export async function playlists(req, env, me, p) {
     const name = String(b.name || '').trim().slice(0, 30);
     if (!name) return json({ error: 'name' }, 400);
     const c = await env.DB.prepare('SELECT COUNT(*) n FROM playlists WHERE owner=?').bind(me.id).first();
-    if (c.n >= 30) return json({ error: 'limit' }, 409);
+    if (c.n >= MAX_PLAYLISTS) return json({ error: 'limit' }, 409);
     const id = crypto.randomUUID().slice(0, 8);
     await env.DB.prepare('INSERT INTO playlists (id,owner,name,created) VALUES (?,?,?,?)')
       .bind(id, me.id, name, Date.now()).run();
@@ -42,7 +43,7 @@ export async function playlists(req, env, me, p) {
     const t = b.track || {};
     if (!/^[\w-]{11}$/.test(t.tid || '') || !(Number(t.dur) > 0) || !t.title) return json({ error: 'bad' }, 400);
     const c = await env.DB.prepare('SELECT COUNT(*) n, COALESCE(MAX(pos),0) m FROM playlist_tracks WHERE playlist=?').bind(id).first();
-    if (c.n >= 200) return json({ error: 'limit' }, 409);
+    if (c.n >= MAX_TRACKS) return json({ error: 'limit' }, 409);
     await env.DB.prepare(
       `INSERT OR IGNORE INTO playlist_tracks (playlist,tid,title,artist,dur,cover,pos) VALUES (?,?,?,?,?,?,?)`
     ).bind(id, t.tid, String(t.title).slice(0, 200), String(t.artist || '').slice(0, 100),

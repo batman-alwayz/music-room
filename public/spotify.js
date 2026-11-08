@@ -1,5 +1,12 @@
 // Spotify Connect on the person's own device: the Spotify app plays the song, so it counts in their Spotify history.
 // Spotify only allows this for Premium accounts. Everything goes through the token the Worker keeps fresh.
+
+// Commands we sent to Spotify ourselves. The room's sync poller ignores state changes right after
+// one of these, so a room-driven pause/seek is not mistaken for the person pressing buttons in Spotify.
+let lastCmdAt = 0;
+const markCmd = () => { lastCmdAt = Date.now(); };
+export const spCommandedRecently = (ms = 3000) => Date.now() - lastCmdAt < ms;
+
 export function spApi(getToken) {
   async function raw(method, path, body, retry = true) {
     const t = await getToken(!retry);
@@ -55,12 +62,18 @@ export const connect = api => {
       if (!s || s.progress_ms == null || !s.is_playing) return null;
       return s.progress_ms + (s.timestamp ? Math.min(5000, Math.max(0, Date.now() - s.timestamp)) : 0);
     },
-    seek: ms => device && api.put(`/me/player/seek?position_ms=${Math.round(ms)}&${q()}`),
+    seek: ms => { markCmd(); return device && api.put(`/me/player/seek?position_ms=${Math.round(ms)}&${q()}`); },
     play: async (uri, ms) => {
-      if (!device) await pick();
+      await pick();                                        // re-pick every time: follow whichever device is active now
+      markCmd();
       return api.put(`/me/player/play?${q()}`, { uris: [uri], position_ms: Math.round(ms) });   // { ok, status, reason, message }
     },
-    pause: () => device && api.put(`/me/player/pause?${q()}`),
+    pause: async () => { if (!device) await pick(); markCmd(); return device && api.put(`/me/player/pause?${q()}`); },
+    state: async () => {                                   // what Spotify itself reports, for two-way sync
+      const s = await api.get('/me/player');
+      if (!s || !s.currently_playing) return null;
+      return { playing: !!s.is_playing, position: s.progress_ms || 0, uri: s.currently_playing.uri };
+    },
     setMuted: async m => {                                   // Spotify has no mute: use volume, and put it back after
       if (!device) return;
       if (m) {
@@ -126,13 +139,19 @@ export function sdkConnect(api, getToken, onAutoplay) {
     activate: () => player?.activateElement?.(),
     disconnect: () => player?.disconnect?.(),
     position: async () => { const s = await player?.getCurrentState?.(); return !s || s.paused ? null : s.position; },
-    seek: ms => player?.seek?.(Math.round(ms)),
+    seek: ms => { markCmd(); return player?.seek?.(Math.round(ms)); },
     play: async (uri, ms) => {
+      markCmd();
       const r = await api.put(`/me/player/play?device_id=${device}`, { uris: [uri], position_ms: Math.round(ms) });
       if (!r.ok && !r.reason && err?.kind === 'account_error') return { ...r, reason: 'PREMIUM_REQUIRED', message: err.message };
       return r;
     },
-    pause: () => player?.pause?.(),
+    pause: () => { markCmd(); return player?.pause?.(); },
+    state: async () => {                                   // what the in-browser Spotify player reports
+      const s = await player?.getCurrentState?.();
+      if (!s || !s.track_window?.current_track) return null;
+      return { playing: !s.paused, position: s.position, uri: s.track_window.current_track.uri };
+    },
     setMuted: m => { vol = m ? 0 : 0.8; return player?.setVolume?.(vol); },
     end: dur => new Promise(res => {                         // only after we saw it playing near the end and then stop
       let last = 0, seen = false;
