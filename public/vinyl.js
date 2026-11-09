@@ -364,7 +364,7 @@ export function createVinyl(canvas, overlay, api) {
     if (!running) return;
     requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now - (last || now)) / 1000); last = now;
-    speed += ((api.playing() ? 0.55 : 0) - speed) * Math.min(1, dt * 2.5);   // eases to a stop when paused
+    speed += ((api.playing() ? 0.68 : 0) - speed) * Math.min(1, dt * 2.5);   // slightly quicker spin; eases to a stop when paused
     rot = (rot + speed * dt) % TAU;
 
     const shape = SHAPES.find(s => s.id === api.shape?.()) || SHAPES[1];

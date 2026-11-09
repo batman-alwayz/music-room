@@ -1,7 +1,7 @@
 import { setOffset, serverNow, startLoop } from './sync.js';
 import { ytm, web, manual } from './players.js';
 import { createVinyl, parseLrc, lineIndex, SHAPES } from './vinyl.js';
-import { spApi, connect as spConnect, sdkConnect, whyNot, queueAdds, findUri, spCommandedRecently } from './spotify.js';
+import { spApi, connect as spConnect, sdkConnect, whyNot, queueAdds, findUri } from './spotify.js';
 import { createStage } from './stage.js';
 
 const QUOTA = 10;                                            // songs one person may have queued
@@ -18,7 +18,9 @@ let S = fresh();
 let me, player, yt, spot = null, spApiObj = null, vinyl, loop, ws, ready = false, room = null;
 let spLink = { connected: false, hasId: false }, spTok = null, spExp = 0, warnedSp = false;
 let curLyr = null, lastLyrI = -1, seekDrag = false;
-let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null, spPrev = null;
+let spotifyPos = null, spotifyPosAt = 0, spotifyIsPlaying = false;
+let spotifyObserved = null, spotifyStateBusy = false, spotifyEchoUntil = 0;
+let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null;
 let stage = null, spotKind = '', shapeId = 'pixel';
 const roomSpUris = new Set();
 let wantArmed = true, beganSeq = -1, beginTimer, playToken = 0, lastDrift = 0, backoff = 1000, lastArm = 0;
@@ -26,6 +28,44 @@ let status = '', routeNote = '', tab = 'search', lastItems = [], lastVinylTid = 
 let showVid = store.get('vid') === '1', spinLyr = store.get('spin') === '1', muted = store.get('mute') === '1';
 let pls = [], openPl = null, plFrom = 'lobby', renaming = false, delArmed = false, toastT;
 const lyrCache = new Map();
+
+const DESIGN_DEFAULTS = { app: '#f5f0e8', lyrics: '#c96e50', disc: '#c96e50' };
+const colorHue = hex => {
+  const n = parseInt(String(hex).replace('#',''),16), r=((n>>16)&255)/255, g=((n>>8)&255)/255, b=(n&255)/255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b), d=max-min;
+  if (!d) return 0;
+  let h=max===r?((g-b)/d)%6:max===g?(b-r)/d+2:(r-g)/d+4;
+  return (h*60+360)%360;
+};
+function applyDesign() {
+  const colors = {
+    app: store.get('design:app') || DESIGN_DEFAULTS.app,
+    lyrics: store.get('design:lyrics') || DESIGN_DEFAULTS.lyrics,
+    disc: store.get('design:disc') || DESIGN_DEFAULTS.disc
+  };
+  const root = document.documentElement;
+  const rgb = [16,8,0].map(s => (parseInt(colors.app.slice(1),16) >> s) & 255);
+  const luminance = rgb.reduce((sum,v,i) => sum + [0.2126,0.7152,0.0722][i] * (v/255 <= .04045 ? v/12.92 : Math.pow((v/255+.055)/1.055,2)),0);
+  const dark = luminance < .48;
+  root.style.setProperty('--ui-bg', colors.app);
+  root.style.setProperty('--ui-panel', mixColor(colors.app, dark ? '#252729' : '#ffffff', .78));
+  root.style.setProperty('--ui-ink', dark ? '#f5f1ea' : '#252729');
+  root.style.setProperty('--ui-muted', mixColor(colors.app, dark ? '#ffffff' : '#252729', .56));
+  root.style.setProperty('--ui-line', mixColor(colors.app, dark ? '#ffffff' : '#252729', .18));
+  root.style.setProperty('--ui-accent', colors.lyrics);
+  root.style.setProperty('--ui-lyric', colors.lyrics);
+  root.style.setProperty('--ui-disc-hue', colorHue(colors.disc) + 'deg');
+  for (const [id,key] of [['appColor','app'],['lyricsColor','lyrics'],['discColor','disc']]) {
+    const el = $('#' + id); if (el) el.value = colors[key];
+  }
+}
+function mixColor(a,b,t) {
+  const x=parseInt(a.slice(1),16), y=parseInt(b.slice(1),16);
+  const c=[16,8,0].map(s=>Math.round(((x>>s)&255)*(1-t)+((y>>s)&255)*t).toString(16).padStart(2,'0')).join('');
+  return '#'+c;
+}
+function setDesign(key,value) { store.set('design:'+key,value); applyDesign(); }
+
 
 const $ = s => document.querySelector(s);
 const on = (id, ev, fn) => $('#' + id).addEventListener(ev, fn);
@@ -77,6 +117,8 @@ const explain = (r, fallback) =>
 
 function show(name) {
   for (const id of ['login', 'connect', 'lobby', 'room', 'pls']) $('#' + id).hidden = id !== name;
+  $('#mobileNav').hidden = name !== 'room';
+  if (name !== 'room') $('#designPanel').hidden = true;
   $('#webwrap').style.visibility = name === 'room' ? 'visible' : 'hidden';
   if (vinyl) { if (name === 'room') vinyl.start(); else vinyl.stop(); }
 }
@@ -160,12 +202,16 @@ async function joinCode(code) {
 }
 
 // ---------- room connection ----------
-function send(m) { if (ws?.readyState === 1) ws.send(JSON.stringify(m)); }
+function send(m) {
+  if (['pause', 'resume', 'seek'].includes(m.t)) spotifyEchoUntil = Date.now() + 2600;
+  if (ws?.readyState === 1) ws.send(JSON.stringify(m));
+}
 function closeWS() { const w = ws; ws = null; if (w) { w.onclose = null; w.onmessage = null; w.close(); } }
 
 function openRoom(r) {
   closeWS(); clearTimers();
   room = r; S = fresh(); beganSeq = -1; lastDrift = 0; wantArmed = true; status = ''; lastVinylTid = null;
+  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false; spotifyEchoUntil = 0;
   lastShared = null; spQueuePrev = null;
   vinyl.setTrack(null); stage.setTrack(null);
   if (spOn()) { setupSpot(); spot.ready?.(); }                 // warm the Spotify player up so the first song is on time $('#lyrstat').textContent = '';
@@ -180,6 +226,7 @@ function leaveRoom() {
   closeWS(); clearTimers();
   pauseAll();
   room = null; S = fresh();
+  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false;
   history.replaceState(null, '', location.pathname);
   show('lobby'); loadLobby();
 }
@@ -205,11 +252,12 @@ function connectWS() {
 
 function onFrame({ s, now }) {
   setOffset(now);
-  const was = S.playing, wasPaused = S.paused, prevStart = S.startAt, prevGo = S.goAt, prevSeq = S.seq;
+  const was = S.playing, wasPaused = S.paused, prevStart = S.startAt, prevGo = S.goAt, prevSeq = S.seq, prevPos = S.pos;
   S = s;
+  if (S.paused !== wasPaused || S.startAt !== prevStart || S.pos !== prevPos) spotifyEchoUntil = Date.now() + 2600;
   if ((S.playing?.tid || null) !== lastVinylTid) {           // new song on the record
     lastVinylTid = S.playing?.tid || null;
-    spPrev = null;                                          // forget the old song's Spotify position
+    spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false; spotifyObserved = null;
     vinyl.setTrack(S.playing); stage.setTrack(S.playing); stage.setLyrics(null);
     curLyr = null; lastLyrI = -1; renderLyrics();
     if (S.playing) loadLyrics(S.playing);
@@ -221,6 +269,8 @@ function onFrame({ s, now }) {
       pauseAll();
     } else if (!S.paused && (beganSeq !== S.seq || wasPaused)) {   // new song, "join now", or resume
       beganSeq = S.seq; begin();
+    } else if (S.paused && S.pos !== prevPos) {
+      Promise.resolve(player?.seek?.(S.pos)).catch(() => {});                    // paused seek from Spotify or the room
     } else if (!S.paused && prevStart && S.seq === prevSeq && S.goAt === prevGo && S.startAt !== prevStart) {
       Promise.resolve(player?.seek?.(serverNow() - S.startAt)).catch(() => {});   // someone dragged the sound bar: jump now
     }
@@ -265,6 +315,13 @@ async function begin() {
     if (token !== playToken) return;
     const late = Math.max(0, serverNow() - S.startAt);
     player = p;
+    spotifyPos = null; spotifyPosAt = 0;
+    if (p === spot) {
+      vinyl.setLyrics(null);
+      stage.setLyrics(null);
+      $('#lyrstat').textContent = '♪ Lyrics shown without timing during Spotify playback';
+      renderLyrics();
+    }
     const res = await p.play(id, late);
     if (p === spot && !(res && res.ok)) {                    // Spotify said no: tell the person exactly why, then use YouTube
       if (res?.reason === 'PREMIUM_REQUIRED') store.set('spplay', '0');
@@ -272,7 +329,10 @@ async function begin() {
       player = p = yt; await yt.play(t.yt_id || t.tid, late);
     }
     Promise.resolve(p.setMuted?.(muted)).catch(() => {});
-    if (p === spot) { send({ t: 'live', v: true }); roomSpUris.add(id); }
+    if (p === spot) {
+      send({ t: 'live', v: true }); roomSpUris.add(id);
+      try { await observeSpotifyState(await spot.state()); } catch {}
+    }
     if (token !== playToken) return;
     loop = startLoop(p, () => S, paintDrift);
     p.end(t.dur * 1000).then(() => { if (token === playToken) send({ t: 'ended', seq }); });
@@ -298,8 +358,22 @@ function paintDrift(d) {
 // ---------- lyrics ----------
 async function loadLyrics(t) {
   const say = (tid, msg) => { if (S.playing?.tid === tid) $('#lyrstat').textContent = msg; };
+  if (spotifyPlayback()) {
+    curLyr = null; vinyl.setLyrics(null); stage.setLyrics(null);
+    say(t.tid, '♪ Lyrics are unavailable while Spotify playback is active');
+    renderLyrics();
+    return;
+  }
   const label = l => !l ? '♪ No lyrics found for this song' : l.synced ? '♪ Synced lyrics' : '♪ Lyrics (not timed, spread over the song)';
-  const show1 = l => { curLyr = l; vinyl.setLyrics(l); stage.setLyrics(l); lastLyrI = -1; say(t.tid, label(l)); renderLyrics(); };
+  const show1 = l => {
+    curLyr = l;
+    const spotify = spotifyPlayback();
+    vinyl.setLyrics(spotify ? null : l);
+    stage.setLyrics(spotify ? null : l);
+    lastLyrI = -1;
+    say(t.tid, spotify ? '♪ Lyrics shown without timing during Spotify playback' : label(l));
+    renderLyrics();
+  };
   if (lyrCache.has(t.tid)) { if (S.playing?.tid === t.tid) show1(lyrCache.get(t.tid)); return; }
   vinyl.setLyrics(null); say(t.tid, '♪ Loading lyrics…');
   const r = await api('lyrics?' + new URLSearchParams({ tid: t.tid, title: t.title, artist: t.artist || '', dur: String(t.dur) }));
@@ -315,7 +389,13 @@ const lyrOff = () => +(store.get('lo:' + (S.playing?.tid || '')) || 0);      // 
 function renderLyrics() {
   const box = $('#lyrlist'); box.replaceChildren();
   const t = S.playing;
-  $('#lyrctl').hidden = !curLyr?.synced;
+  if (spotifyPlayback()) {
+    $('#lyrctl').hidden = true;
+    $('#lyrpaste').hidden = true;
+    box.append(h('div', { class: 's' }, 'Lyrics are unavailable while Spotify playback is active'));
+    return;
+  }
+  $('#lyrctl').hidden = spotifyPlayback() || !curLyr?.synced;
   $('#lyrpaste').hidden = !t || !!curLyr || $('#lyrstat').textContent.includes('Loading');
   $('#lyrinfo').textContent = `Timing nudge: ${lyrOff() >= 0 ? '+' : ''}${(lyrOff() / 1000).toFixed(1)}s`;
   if (!t) { box.append(h('div', { class: 's' }, 'Play a song to see its lyrics here')); return; }
@@ -324,7 +404,7 @@ function renderLyrics() {
   tickLyrics(true);
 }
 function tickLyrics(force) {
-  if (!curLyr?.synced || !S.playing) return;
+  if (spotifyPlayback() || !curLyr?.synced || !S.playing) return;
   const i = lineIndex(curLyr, songMs() + lyrOff());
   if (i === lastLyrI && !force) return;
   lastLyrI = i;
@@ -339,11 +419,17 @@ function nudge(d) { if (!S.playing) return; store.set('lo:' + S.playing.tid, Str
 
 // ---------- the sound bar ----------
 const fmt = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-function tickSeek() {
+async function tickSeek() {
   const el = $('#seek'), t = S.playing;
   el.disabled = !t;
   if (!t) { el.value = 0; $('#tcur').textContent = '0:00'; $('#tdur').textContent = '0:00'; return; }
-  const ms = Math.max(0, Math.min(songMs(), t.dur * 1000));
+
+  let position = songMs();
+  if (spotifyPlayback() && spotifyPos != null) {
+    position = spotifyPos + (spotifyIsPlaying ? Math.max(0, Date.now() - spotifyPosAt) : 0);
+  }
+
+  const ms = Math.max(0, Math.min(position, t.dur * 1000));
   $('#tdur').textContent = fmt(t.dur * 1000);
   if (!seekDrag) { el.value = Math.round(ms / (t.dur * 1000) * 1000); $('#tcur').textContent = fmt(ms); }
 }
@@ -351,6 +437,44 @@ setInterval(() => { if (!room || !me) return; tickSeek(); tickLyrics(); }, 250);
 
 // ---------- Accounts: Spotify + YouTube Music (Google) ----------
 const spOn = () => spLink.connected && store.get('spplay') !== '0';       // on by default once connected
+const spotifyPlayback = () => spOn() && player === spot;
+
+async function observeSpotifyState(st, fromSdk = false) {
+  if (!st) { spotifyObserved = null; spotifyPos = null; spotifyIsPlaying = false; return; }
+  spotifyPos = Number.isFinite(st.position) ? st.position : null;
+  spotifyPosAt = Date.now();
+  spotifyIsPlaying = !st.paused;
+
+  if (!room || !S.playing || !spotifyPlayback() || !st.trackId || st.source === 'ad') {
+    spotifyObserved = st;
+    return;
+  }
+  const previous = spotifyObserved;
+  spotifyObserved = st;
+  if (!previous || previous.trackId !== st.trackId) return;     // establish a baseline; don't hijack a newly joined room
+  if (Date.now() < spotifyEchoUntil) return;
+
+  const uri = await findUri(spApiObj, S.playing).catch(() => null);
+  if (!uri || (st.uri && st.uri !== uri)) return;               // only mirror controls for the room's current song
+
+  const changed = fromSdk || (st.timestamp && previous.timestamp && st.timestamp !== previous.timestamp);
+  if (!changed) return;
+  if (st.paused !== S.paused) {
+    send({ t: st.paused ? 'pause' : 'resume' });
+    return;
+  }
+  const expected = S.paused ? S.pos : Math.max(0, serverNow() - S.startAt);
+  if (Math.abs(st.position - expected) > 2600) send({ t: 'seek', ms: st.position });
+}
+
+async function pollSpotifyState() {
+  if (!room || !spOn() || !spotifyPlayback() || !spot?.state || spotifyStateBusy) return;
+  spotifyStateBusy = true;
+  try { await observeSpotifyState(await spot.state()); }
+  catch {} finally { spotifyStateBusy = false; }
+}
+setInterval(() => { pollSpotifyState().catch(() => {}); }, 2500);
+
 async function getSpToken(force) {
   if (!force && spTok && Date.now() < spExp - 60000) return spTok;
   const r = await api('spotify/token' + (force ? '?force=1' : ''));
@@ -364,7 +488,10 @@ function setupSpot() {
   if (spot && spotKind === want) return;
   spot?.cancel?.(); spot?.disconnect?.();
   spotKind = want;
-  spot = want === 'browser' ? sdkConnect(spApiObj, getSpToken, () => { $('#tap').hidden = false; }) : spConnect(spApiObj);
+  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false;
+  spot = want === 'browser'
+    ? sdkConnect(spApiObj, getSpToken, () => { $('#tap').hidden = false; }, st => observeSpotifyState(st, true))
+    : spConnect(spApiObj);
 }
 const bad = { connected: false, hasId: false, idOk: false };
 async function loadSpStatus() { const r = await api('spotify/status'); spLink = r.error ? bad : r; if (spLink.connected) setupSpot(); }
@@ -512,25 +639,6 @@ async function pollSpotifyNow() {
 }
 setInterval(() => { pollSpotifyNow().catch(() => {}); }, 7000);
 
-// the other direction of playback control: press play/pause or drag the bar INSIDE Spotify and the
-// room follows, so the site's button and time bar match. Edge-detect changes between polls and ignore
-// anything right after a command we sent ourselves (otherwise the room would echo its own pause/seek).
-async function syncFromSpotify() {
-  if (!room || !S.playing || player !== spot || !spot?.state) { spPrev = null; return; }
-  const st = await spot.state().catch(() => null);
-  if (!st || !roomSpUris.has(st.uri)) { spPrev = null; return; }   // only sync the song the room itself started
-  const now = Date.now();
-  if (spCommandedRecently() || !spPrev) { spPrev = { ...st, at: now }; return; }
-  if (st.playing !== spPrev.playing) {
-    send({ t: st.playing ? 'resume' : 'pause' });
-  } else if (st.playing && spPrev.playing) {
-    const expected = spPrev.position + (now - spPrev.at);
-    if (Math.abs(st.position - expected) > 3000) send({ t: 'seek', ms: st.position });   // a jump, not normal progress
-  }
-  spPrev = { ...st, at: now };
-}
-setInterval(() => { syncFromSpotify().catch(() => {}); }, 1500);
-
 // ---------- people in the room: the admin can kick, block and unblock ----------
 function confirmBtn(label, fn, cls = 'btn ghost small') {
   const b = h('button', { class: cls }, label); let armed = false, t;
@@ -576,6 +684,7 @@ function setTab(t) {
   tab = t;
   $('.tabsarea').dataset.tab = t;
   document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  document.querySelectorAll('[data-mobile-tab]').forEach(b => b.classList.toggle('on', b.dataset.mobileTab === t));
   if (t === 'pls') loadMiniPls();
   if (t === 'lyrics') { renderLyrics(); stage.start(); } else if (!$('#lstage').classList.contains('full')) stage.stop();
   clearInterval(peopleTimer);
@@ -805,6 +914,17 @@ function wire() {
     catch { toast(link); }
   });
   on('tap', 'click', async () => { await yt?.resume?.(); spot?.activate?.(); $('#tap').hidden = true; });
+  on('designOpen', 'click', () => { $('#designPanel').hidden = false; });
+  on('designClose', 'click', () => { $('#designPanel').hidden = true; });
+  on('designPanel', 'click', e => { if (e.target.id === 'designPanel') $('#designPanel').hidden = true; });
+  on('designReset', 'click', () => { for (const k of ['app','lyrics','disc']) store.set('design:'+k, DESIGN_DEFAULTS[k]); applyDesign(); toast('Colors reset'); });
+  for (const [id,key] of [['appColor','app'],['lyricsColor','lyrics'],['discColor','disc']]) {
+    on(id, 'input', e => setDesign(key, e.target.value));
+  }
+  document.querySelectorAll('[data-mobile-tab]').forEach(b => b.addEventListener('click', () => {
+    setTab(b.dataset.mobileTab);
+    document.querySelectorAll('[data-mobile-tab]').forEach(x => x.classList.toggle('on', x === b));
+  }));
   on('screen', 'click', () => {                                    // laptop: click the record to make it bigger
     if (matchMedia('(max-width:700px)').matches) return;
     document.body.classList.toggle('bigdisc');
@@ -854,6 +974,7 @@ function wire() {
   });
   addEventListener('keydown', e => { if (e.key === 'Escape' && $('#lstage').classList.contains('full')) $('#lyrfull').click(); });
   document.querySelectorAll('.tabbtn').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)));
+  document.querySelectorAll('[data-mobile-tab]').forEach(b => b.classList.toggle('on', b.dataset.mobileTab === tab));
   matchMedia('(min-width:1050px)').addEventListener?.('change', () => setTab(tab));
 
   // search: results stay on screen so you can add several songs, or all of them
@@ -915,9 +1036,10 @@ function wire() {
 }
 
 async function init() {
+  applyDesign();
   wire();
   stage = createStage($('#lyrcanvas'), { time: () => songMs() + lyrOff(), playing: () => !!S.playing && !S.paused });
-  shapeId = store.get('shape') || 'pixel';
+  shapeId = store.get('shape') || 'circle';
   const sbox = $('#shapes');
   for (const sh of SHAPES) {
     sbox.append(h('button', { class: 'shp' + (sh.id === shapeId ? ' on' : ''), title: sh.name, 'data-shape': sh.id, onclick: () => {

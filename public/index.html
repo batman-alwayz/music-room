@@ -131,6 +131,82 @@
   #toast[hidden]{display:none}
   #webwrap{position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 10px);transition:right .2s}
   #webwrap.min{opacity:0;pointer-events:none}        /* invisible but still on screen, so the browser keeps playing the audio */
+
+  /* Music Room — warm, minimal, mobile-first design */
+  :root{--ui-bg:#f5f0e8;--ui-panel:#fffdf8;--ui-ink:#252729;--ui-muted:#77736d;--ui-line:#e7dfd4;--ui-accent:#c96e50;--ui-lyric:#c96e50;--ui-disc-hue:0deg;color-scheme:light}
+  html,body{background:var(--ui-bg);color:var(--ui-ink)}
+  body{font-family:Inter,ui-sans-serif,system-ui,sans-serif;padding-bottom:calc(env(safe-area-inset-bottom) + 104px)}
+  .top{padding:14px 2px}
+  .t{font-weight:650;letter-spacing:-.025em}
+  .s{color:var(--ui-muted)}
+  .card,.sheet{background:var(--ui-panel);border:1px solid var(--ui-line);border-radius:18px;box-shadow:0 8px 24px #34291b0a}
+  .btn{background:var(--ui-ink);color:#fff;border-radius:999px;padding:10px 16px;font-weight:600}
+  .ghost,.tabbtn{background:#eee8df;color:var(--ui-ink)}
+  .tabbtn.on{background:var(--ui-ink);color:#fff}
+  input,textarea{background:var(--ui-panel);color:var(--ui-ink);border:1px solid var(--ui-line);border-radius:12px}
+  input[type=range]{accent-color:var(--ui-accent)}
+  .row{border-color:var(--ui-line)}
+  .chip{background:#eee8df;color:var(--ui-ink)}
+  .chip.ok{background:#e4f0e5;color:#315f3c}
+  .main{gap:20px}
+  .stage{padding:20px 0 12px}
+  .stage::after{bottom:2px;opacity:.18}
+  .box{width:min(86vw,360px);transform:none!important;animation:none!important}
+  .front{padding:0;background:transparent;box-shadow:none}
+  .topf,.rightf,.led{display:none}
+  .screen{width:100%;box-sizing:border-box;aspect-ratio:1;border-radius:50%;padding:0;background:#1d2022;overflow:hidden;
+    box-shadow:0 18px 42px #34291b22,0 0 0 9px #fffdf8,0 0 0 10px var(--ui-line)}
+  #vinyl{image-rendering:auto;filter:hue-rotate(var(--ui-disc-hue)) saturate(1.18)}
+  #vinylhi{filter:drop-shadow(0 1px 2px #0002)}
+  #seekrow{max-width:520px;margin:10px auto 0;gap:10px}
+  #seekrow span{color:var(--ui-muted)}
+  #np{padding:12px 8px 4px}
+  #np .t{font-size:20px}
+  #ctl{gap:12px;padding:12px 0}
+  #ctl .btn{min-width:46px;height:46px;border-radius:50%;font-size:17px}
+  #ctl .btn:nth-child(2){background:var(--ui-accent);color:white;min-width:58px;height:58px;font-size:22px}
+  #armbar{padding:8px 0}
+  #lyrlist{max-height:52vh;padding:20px 14px;border-radius:18px;background:var(--ui-panel);border:1px solid var(--ui-line);text-align:center;scroll-padding:45% 0}
+  .lyrline{padding:12px 8px;color:#aaa39a;font-size:17px;line-height:1.5;letter-spacing:-.015em;transition:color .25s,transform .25s,font-size .25s}
+  .lyrline.on{color:var(--ui-lyric);font-size:23px;font-weight:650;transform:scale(1.025)}
+  .lstage{background:#e9e0d5;border-radius:20px}
+  .lstage .lfull{background:#252729;color:white}
+  #lyrctl{justify-content:center}
+  #shapes{padding:10px 0}
+  .shp{background:var(--ui-panel);border-color:var(--ui-line)}
+  .shp.on{border-color:var(--ui-accent)}
+  .shp i{background:var(--ui-accent)}
+  #room>.top{position:sticky;top:0;z-index:5;background:var(--ui-bg)}
+  .tabbar{gap:6px;flex-wrap:wrap}
+  .tabsarea{min-width:0}
+  #tab-search,#tab-queue,#tab-pls,#tab-people,#tab-lyrics{padding-bottom:12px}
+  #mobileNav{display:none}
+  #designPanel{position:fixed;inset:0;z-index:35;background:#211d18a8;display:flex;align-items:flex-end;justify-content:center}
+  #designPanel[hidden]{display:none}
+  #designSheet{width:min(100%,520px);max-height:82dvh;overflow:auto;background:var(--ui-panel);color:var(--ui-ink);border-radius:24px 24px 0 0;padding:22px 20px calc(env(safe-area-inset-bottom) + 24px);box-sizing:border-box}
+  .designPick{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:13px 0;border-bottom:1px solid var(--ui-line)}
+  .designPick input[type=color]{width:48px;height:40px;padding:3px;border:1px solid var(--ui-line);border-radius:12px;background:var(--ui-panel)}
+  #designClose{float:right}
+  @media(max-width:700px){
+    body{padding-left:14px;padding-right:14px;padding-bottom:calc(env(safe-area-inset-bottom) + 104px)}
+    .main{display:block}
+    .stage{padding:14px 0 8px}
+    .box{width:min(78vw,340px)!important}
+    .front{padding:0}
+    .screen{padding:0}
+    .tabbar{display:none}
+    #mobileNav{position:fixed;display:flex;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 10px);z-index:25;
+      justify-content:space-around;gap:4px;padding:8px;background:#202224;color:#fff;border-radius:22px;
+      box-shadow:0 12px 34px #0002}
+    #mobileNav button{flex:1;min-width:0;border:0;background:transparent;color:#d4d0ca;border-radius:15px;padding:10px 3px;font:inherit;font-size:11px}
+    #mobileNav button.on{background:#fff;color:#252729}
+    #room>.top{margin:0 -2px}
+    #tab-lyrics{padding-bottom:20px}
+    #lyrlist{max-height:45dvh}
+    #ctl .btn.small{font-size:11px}
+  }
+  @media(prefers-reduced-motion:reduce){.lyrline{transition:none}}
+
 </style>
 
 <div id="login" hidden>
@@ -181,6 +257,7 @@
     <button id="back" class="btn ghost" title="Back to rooms">←</button>
     <div style="flex:1;min-width:0"><div id="rtitle" class="t"></div><div id="rcodeline" class="s"></div></div>
     <button id="invite" class="btn ghost">Invite</button>
+    <button id="designOpen" class="btn ghost" title="Appearance settings" aria-label="Appearance settings">◐</button>
     <button id="leave" class="btn ghost" title="Leave this room for good">Leave</button>
   </div>
   <div class="main">
@@ -310,6 +387,25 @@
   </div>
 </div>
 
+
+<nav id="mobileNav" aria-label="Main navigation">
+  <button data-mobile-tab="search" class="on">⌕<br>Search</button>
+  <button data-mobile-tab="queue">≡<br>Queue</button>
+  <button data-mobile-tab="lyrics">♫<br>Lyrics</button>
+  <button data-mobile-tab="people">◎<br>People</button>
+  <button data-mobile-tab="pls">▤<br>Playlists</button>
+</nav>
+<div id="designPanel" hidden>
+  <section id="designSheet" aria-label="Appearance settings">
+    <button id="designClose" class="btn ghost" type="button">Done</button>
+    <div class="t" style="font-size:22px;margin:4px 0 4px">Make it yours</div>
+    <div class="s">Choose three colors. Your choices stay on this device.</div>
+    <label class="designPick"><span><b>App color</b><div class="s">Main background and accents</div></span><input id="appColor" type="color" value="#f5f0e8"></label>
+    <label class="designPick"><span><b>Lyrics color</b><div class="s">Highlighted lyric line</div></span><input id="lyricsColor" type="color" value="#c96e50"></label>
+    <label class="designPick"><span><b>Disc color</b><div class="s">Record tint</div></span><input id="discColor" type="color" value="#c96e50"></label>
+    <button id="designReset" class="btn ghost" style="width:100%;margin-top:16px" type="button">Reset colors</button>
+  </section>
+</div>
 <div id="overlay" hidden></div>
 <div id="toast" hidden></div>
 <div id="webwrap" hidden class="min"><div id="webplayer"></div></div>
