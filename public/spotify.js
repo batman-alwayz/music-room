@@ -41,20 +41,27 @@ export async function findUri(api, t) {
 
 // same shape as the YouTube players: position / seek / play / pause / setMuted / end / cancel
 export const connect = api => {
-  let timer = null, device = null, prevVol = null;
-  const pick = async () => {
+  let timer = null, device = null, prevVol = null, devicesAt = 0, devList = [];
+  const cacheDevices = async force => {
+    if (!force && devList.length && Date.now() - devicesAt < 8000) return devList;
     const r = await api.get('/me/player/devices');
-    const l = r?.devices || [];
-    device = (l.find(d => d.is_active) || l.find(d => !d.is_restricted))?.id || null;
+    devList = r?.devices || []; devicesAt = Date.now();
+    return devList;
+  };
+  const pick = async force => {
+    const l = await cacheDevices(force);
+    // the device that is already playing wins; otherwise the one we used last; otherwise any usable one
+    const d = l.find(x => x.is_active) || l.find(x => x.id === device) || l.find(x => !x.is_restricted);
+    if (d?.id) device = d.id;
     return device;
   };
   const q = () => `device_id=${device}`;
   let cached = null, cachedAt = 0;
   const read = async (force = false) => {
-    if (!force && cached && Date.now() - cachedAt < 1800) return cached;
+    if (!force && cached && Date.now() - cachedAt < 1200) return cached;
     cached = await api.get('/me/player');
     cachedAt = Date.now();
-    if (cached?.device?.id) device = cached.device.id;
+    if (cached?.device?.id) { device = cached.device.id; if (!devList.some(d => d.id === device)) devList.push(cached.device); }
     return cached;
   };
   const snapshot = s => s ? ({
@@ -73,31 +80,38 @@ export const connect = api => {
     },
     seek: ms => api.put(`/me/player/seek?position_ms=${Math.round(ms)}`),
     play: async (uri, ms) => {
-      const current = await read(true);
-      if (!current?.device?.id && !device) await pick();
-      const target = current?.device?.id || device;
-      const path = target ? `/me/player/play?device_id=${target}` : '/me/player/play';
-      return api.put(path, { uris: [uri], position_ms: Math.round(ms) });   // { ok, status, reason, message }
+      // no forced round trip before every song: use the cached device, fall back to a lookup only if unknown
+      if (!device) await pick();
+      const send = () => api.put(device ? `/me/player/play?device_id=${device}` : '/me/player/play',
+        { uris: [uri], position_ms: Math.round(ms) });
+      let r = await send();
+      cached = null; cachedAt = 0;                           // the next read must be fresh
+      if (!r.ok && (r.status === 404 || r.reason === 'NO_ACTIVE_DEVICE')) {
+        device = null; await pick(true);                     // the device list changed under us
+        if (device) r = await send();                        // one retry, so a device switch just works
+      }
+      return r;                                              // { ok, status, reason, message }
     },
     pause: () => api.put('/me/player/pause'),
     setMuted: async m => {                                   // Spotify has no mute: use volume, and put it back after
+      if (!device) await pick();
       if (!device) return;
       if (m) {
-        const s = await read(true);
+        const s = await read();
         const v = s?.device?.volume_percent;
         if (prevVol == null && v > 0) prevVol = v;
         await api.put(`/me/player/volume?volume_percent=0&${q()}`);
       } else if (prevVol != null) { await api.put(`/me/player/volume?volume_percent=${prevVol}&${q()}`); prevVol = null; }
     },
     end: dur => new Promise(res => {                         // only after we saw it playing near the end and then stop
-      let last = 0, seen = false;
+      let last = 0, seen = false, tick = 0;
       clearInterval(timer);
       timer = setInterval(async () => {
-        const s = await read();
+        const s = await read(++tick % 3 === 0);              // a fresh read now and then, so the end is seen promptly
         if (!s) return;
         if (s.is_playing) { seen = true; last = s.progress_ms; return; }
         if (seen && last >= dur - 4000) { clearInterval(timer); res(); }
-      }, 1000);
+      }, 650);
     }),
     cancel: () => clearInterval(timer)
   };

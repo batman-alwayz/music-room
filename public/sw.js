@@ -1,8 +1,8 @@
 // network-first so a new deploy is picked up (the old cache-first file served stale code forever)
-const C = 'v2';
+const C = 'v3';
 self.addEventListener('install', e => {
   self.skipWaiting();
-  e.waitUntil(caches.open(C).then(c => c.addAll(['/', '/app.js', '/sync.js', '/players.js', '/vinyl.js', '/spotify.js', '/stage.js'])));
+  e.waitUntil(caches.open(C).then(c => c.addAll(['/', '/app.js', '/sync.js', '/players.js', '/vinyl.js', '/spotify.js', '/stage.js', '/theme.js'])));
 });
 self.addEventListener('activate', e => e.waitUntil(
   caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k))))

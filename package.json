@@ -1,0 +1,12 @@
+{
+  "name": "music-room",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Music Room — listen together in sync (Cloudflare Worker + static front-end)",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check public/app.js && node --check public/vinyl.js && node --check public/theme.js && node --check public/spotify.js && node --check public/sync.js && node --check public/stage.js && node --check public/players.js"
+  },
+  "devDependencies": {}
+}
