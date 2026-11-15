@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setOffset, serverNow, startLoop } from '../public/sync.js';
-import { spApi, connect as spConnect, queueAdds, whyNot, findUri } from '../public/spotify.js';
+import { spApi, connect as spConnect, queueAdds, whyNot, findUri, bestDevice, usableDevice } from '../public/spotify.js';
 
 // startLoop uses setInterval; capture the callback and the period so a test can drive it explicitly.
 function fakeInterval() {
@@ -202,4 +202,59 @@ test('findUri matches a song by title and length, and caches the answer', async 
   assert.equal(await findUri(api, t), 'spotify:track:right');
   assert.equal(await findUri(api, t), 'spotify:track:right', 'cached');
   assert.equal(searches, 1, 'only searched once');
+});
+
+// ---------- choosing where Spotify plays ----------
+const dev = (id, type, extra = {}) => ({ id, name: id, type, is_restricted: false, ...extra });
+
+test('usableDevice rejects restricted devices and those without an id', () => {
+  assert.equal(usableDevice(dev('a', 'Computer')), true);
+  assert.equal(usableDevice({ id: 'b', is_restricted: true }), false);
+  assert.equal(usableDevice({ name: 'no id' }), false);
+  assert.equal(usableDevice(null), false);
+});
+
+test('bestDevice follows whatever is already playing', () => {
+  const list = [dev('mac', 'Computer'), dev('phone', 'Smartphone', { is_active: true })];
+  assert.equal(bestDevice(list).id, 'phone');
+});
+
+test('bestDevice prefers a computer, then a phone, over a speaker or a TV', () => {
+  const list = [dev('tv', 'TV'), dev('speaker', 'Speaker'), dev('phone', 'Smartphone'), dev('mac', 'Computer')];
+  assert.equal(bestDevice(list).id, 'mac');
+  assert.equal(bestDevice([dev('tv', 'TV'), dev('speaker', 'Speaker'), dev('phone', 'Smartphone')]).id, 'phone');
+  assert.equal(bestDevice([dev('tv', 'TV'), dev('speaker', 'Speaker')]).id, 'speaker');
+});
+
+test('bestDevice never returns a restricted device, and copes with an empty list', () => {
+  const list = [dev('roku', 'TV', { is_restricted: true }), dev('laptop', 'Computer')];
+  assert.equal(bestDevice(list).id, 'laptop');
+  assert.equal(bestDevice([dev('roku', 'TV', { is_restricted: true })]), null);
+  assert.equal(bestDevice([]), null);
+  assert.equal(bestDevice(null), null);
+});
+
+test('the Spotify player remembers the chosen device and can be told which one to use', async () => {
+  const calls = [];
+  const api = {
+    get: async p => p === '/me/player/devices'
+      ? { devices: [dev('mac', 'Computer'), dev('phone', 'Smartphone')] }
+      : null,
+    put: async p => { calls.push(p); return { ok: true }; }
+  };
+  const store = {};
+  globalThis.localStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); } };
+  const sp = spConnect(api);
+
+  assert.equal(await sp.ready(), true);
+  assert.equal(sp.deviceId(), 'mac');                        // a computer is the best default
+  assert.equal(store['sp:device'], 'mac');                   // and it is remembered across reloads
+
+  sp.setDevice('phone');
+  assert.equal(sp.deviceId(), 'phone');
+  assert.equal(store['sp:device'], 'phone');
+
+  const list = await sp.devices();
+  assert.deepEqual(list.map(d => d.id), ['mac', 'phone']);   // computers sort before phones
+  delete globalThis.localStorage;
 });

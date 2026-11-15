@@ -4,6 +4,10 @@
 //      words hop as they are sung, and lines blow in and out like wind.
 // Every colour comes from a theme object (see theme.js) so the record can be re-tinted on its own.
 const N = 80, CX = 39.5, CY = 39.5, RD = 38, RL = 13;
+// every shape reaches this far from the centre along its axes, in disc pixels (measured, not guessed).
+// Scaling so this lands on the round frame's edge fills the frame exactly: a shape's flat edges touch
+// the frame and its corners (a square's, say) are neatly trimmed by the circle.
+const DISC_REACH = 39;
 const PI = Math.PI, TAU = 2 * PI;
 
 // default palette: used until the app hands one over, and by the tests
@@ -394,8 +398,7 @@ export function createVinyl(canvas, overlay, api) {
       const im = new Image(); im.src = url; await im.decode();
       URL.revokeObjectURL(url);
       if (token !== coverToken) return;
-      const wide = im.width / im.height > 1.5;               // 16:9 (sharp art) or a 4:3 thumbnail with black bars
-      const side = wide ? im.height : im.height * 0.75;
+      const side = Math.min(im.width, im.height);            // largest centred square: square art is untouched, wide art is centre-cropped
       const x = cov.getContext('2d');
       x.clearRect(0, 0, 384, 384); x.imageSmoothingQuality = 'high';
       x.drawImage(im, (im.width - side) / 2, (im.height - side) / 2, side, side, 0, 0, 384, 384);
@@ -422,6 +425,8 @@ export function createVinyl(canvas, overlay, api) {
     // slightly quicker, and it eases to a stop when paused / back up to speed when playback resumes
     const target = api.playing() ? 1.15 : 0;
     speed += (target - speed) * Math.min(1, dt * (target > speed ? 5.5 : 3.2));
+    // exponential easing only approaches zero, so snap the last sliver: a paused record is truly still
+    if (target === 0 && speed < 0.004) speed = 0;
     rot = (rot + speed * dt) % TAU;
 
     const shape = SHAPES.find(s => s.id === api.shape?.()) || SHAPES[1];
@@ -449,10 +454,10 @@ export function createVinyl(canvas, overlay, api) {
 
   // size: the pixel disc at a whole number of screen pixels per disc pixel; the sharp layer matches it exactly
   function fit() {
-    const w = Math.floor(canvas.parentElement.clientWidth - 16);
-    const narrow = matchMedia('(max-width:720px)').matches;
-    const css = narrow ? Math.max(120, w)                                   // phone: as big as the screen allows
-      : N * Math.min(api.big?.() ? 6 : 3.6, Math.max(2, Math.floor(w / N)));  // laptop: 3.6x, or 6x after a click
+    const frame = Math.max(96, canvas.parentElement.clientWidth || 300);
+    // fill the round frame without clipping: scale so this shape's widest point lands on the frame
+    // edge, keeping a whole number of screen pixels per disc pixel so the artwork stays crisp
+    const css = Math.max(96, frame * (N / 2) / DISC_REACH);   // the disc's edge lands exactly on the round frame
     canvas.style.width = canvas.style.height = overlay.style.width = overlay.style.height = css + 'px';
     const px = Math.round(css * Math.min(2, window.devicePixelRatio || 1));
     if (px !== W) { W = px; overlay.width = overlay.height = W; key = ''; }

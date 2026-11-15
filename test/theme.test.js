@@ -42,11 +42,11 @@ test('light and dark app themes both keep text readable', () => {
   }
 });
 
-test('lyrics colour is nudged until it reads on the app panel', () => {
-  for (const panel of ['#fffdf8', '#181a20']) {
-    const lyr = buildLyricsTheme('#c96e50', { panel });
-    assert.ok(contrast(lyr.active, panel) >= 4.4, `active on ${panel}: ${contrast(lyr.active, panel)}`);
-    assert.ok(contrast(lyr.idle, panel) >= 2.9, `idle on ${panel}: ${contrast(lyr.idle, panel)}`);
+test('lyrics colour is nudged until it reads on the lyrics surface', () => {
+  for (const color of ['#c96e50', '#4fd1a5', '#e0b24d', '#a78bfa']) {
+    const lyr = buildLyricsTheme(color);
+    assert.ok(contrast(lyr.active, lyr.panel) >= 4.4, `active on ${lyr.panel}: ${contrast(lyr.active, lyr.panel)}`);
+    assert.ok(contrast(lyr.idle, lyr.panel) >= 2.9, `idle on ${lyr.panel}: ${contrast(lyr.idle, lyr.panel)}`);
     assert.notEqual(lyr.active, lyr.idle);
   }
 });
@@ -78,21 +78,21 @@ test('the three themes are independent', () => {
   assert.equal(newApp.lyrics.chosen, base.lyrics.chosen, 'lyric colour choice is kept');
 });
 
-test('a light/dark flip only rebalances lyric lightness, never the hue', () => {
-  const light = buildThemes({ app: '#f5f0e8', appAccent: '#c96e50', lyrics: '#c96e50', disc: '#3f6fd8' });
-  const dark = buildThemes({ app: '#0e1016', appAccent: '#7cc6ff', lyrics: '#c96e50', disc: '#3f6fd8' });
-  assert.equal(dark.lyrics.chosen, light.lyrics.chosen, 'the colour the user picked is unchanged');
-  assert.ok(contrast(dark.lyrics.active, dark.app.panel) >= 4.4, 'still readable on the dark panel');
-  assert.ok(contrast(light.lyrics.active, light.app.panel) >= 4.4, 'still readable on the light panel');
-  // same light mode, different app colour: the lyric colour barely moves (only what readability needs)
-  const otherLight = buildThemes({ app: '#efe6d8', appAccent: '#b07d3a', lyrics: '#c96e50', disc: '#3f6fd8' });
-  assert.equal(otherLight.lyrics.chosen, light.lyrics.chosen);
+test('the lyrics surface follows the lyric colour, never the app theme', () => {
+  const a = buildThemes({ app: '#f5f0e8', appAccent: '#c96e50', lyrics: '#c96e50', disc: '#3f6fd8' });
+  const b = buildThemes({ app: '#0e1016', appAccent: '#7cc6ff', lyrics: '#c96e50', disc: '#3f6fd8' });
+  // flipping the app from light to dark leaves the lyric colours and their surface untouched
+  assert.deepEqual(b.lyrics, a.lyrics, 'app theme flip does not restyle the lyrics');
+  assert.ok(contrast(a.lyrics.active, a.lyrics.panel) >= 4.4, 'readable on the lyrics surface');
+  // a different lyric colour keeps its hue; only lightness moves for readability
+  const c = buildThemes({ app: '#f5f0e8', appAccent: '#c96e50', lyrics: '#00c853', disc: '#3f6fd8' });
+  assert.equal(c.lyrics.chosen, '#00c853');
   const hue = hex => rgbToHsl(hexToRgb(hex)).h;
-  assert.ok(Math.abs(hue(otherLight.lyrics.active) - hue(light.lyrics.active)) < 2, 'hue is preserved');
+  assert.ok(Math.abs(hue(c.lyrics.active) - hue('#00c853')) < 3, 'hue is preserved');
 });
 
 test('ring colours follow the lyrics and disc themes', () => {
-  const lyrics = buildLyricsTheme('#e0b24d', { panel: '#fffdf8' });
+  const lyrics = buildLyricsTheme('#e0b24d');
   const disc = buildDiscTheme('#3f6fd8');
   const ring = buildRingTheme(lyrics, disc);
   assert.equal(ring.length, 3);
@@ -115,7 +115,7 @@ test('presets are valid hex colours with names', () => {
 test('bad input falls back to defaults instead of throwing', () => {
   const t = buildThemes({ app: 'not-a-colour', appAccent: 'nope', lyrics: null, disc: 42 });
   assert.equal(t.app.base, DESIGN_DEFAULTS.app);
-  assert.equal(t.lyrics.active, readable(DESIGN_DEFAULTS.lyrics, t.app.panel));
+  assert.equal(t.lyrics.active, readable(DESIGN_DEFAULTS.lyrics, t.lyrics.panel));
   assert.ok(t.disc.vinyl.startsWith('#'));
   assert.ok(deriveAccent('#f5f0e8').startsWith('#'));
 });
@@ -131,7 +131,7 @@ test('every shipped preset meets WCAG AA for its text', () => {
   }
   for (const p of PRESETS.lyrics) {
     const t = buildThemes({ app: DESIGN_DEFAULTS.app, appAccent: DESIGN_DEFAULTS.appAccent, lyrics: p.color, disc: DESIGN_DEFAULTS.disc });
-    if (contrast(t.lyrics.active, t.app.panel) < 4.5) bad.push(`lyrics ${p.name}: ${contrast(t.lyrics.active, t.app.panel).toFixed(2)}`);
+    if (contrast(t.lyrics.active, t.lyrics.panel) < 4.5) bad.push(`lyrics ${p.name}: ${contrast(t.lyrics.active, t.lyrics.panel).toFixed(2)}`);
   }
   assert.deepEqual(bad, [], 'presets below AA: ' + bad.join(', '));
 });

@@ -142,15 +142,20 @@ export function buildAppTheme(bg, accentIn) {
   return { base, dark, panel, soft, ink, muted, line, accent, accentInk, shadow: dark ? '#000000' : '#34291b' };
 }
 
-// The lyrics theme owns only the lyric colours. The surface it sits on belongs to the app theme,
-// so re-colouring the app never restyles the lyrics, and vice versa.
-export function buildLyricsTheme(color, app) {
+// The lyrics theme owns both its text colours and the surface they sit on, so it depends on the
+// chosen lyric colour alone: re-colouring the app never restyles the lyrics, and vice versa. A dark
+// lyric colour lands on a light card and a light one on a dark card, which keeps the text readable
+// without borrowing anything from the app theme.
+export function buildLyricsTheme(color) {
   const pick = /^#[0-9a-f]{6}$/i.test(String(color)) ? color : DESIGN_DEFAULTS.lyrics;
-  const panel = app?.panel || '#ffffff';
-  const dark = isDark(panel);
+  const { h, s } = rgbToHsl(hexToRgb(pick));
+  const onLight = isDark(pick);
+  const panel = onLight
+    ? hslToHex({ h, s: clamp(s, 0, 0.22), l: 0.965 })      // light card for a darker lyric colour
+    : hslToHex({ h, s: clamp(s, 0, 0.30), l: 0.085 });     // dark card for a lighter one
   const active = readable(pick, panel, 4.5);
-  const idle = readable(mix(panel, dark ? '#ffffff' : '#000000', dark ? 0.40 : 0.45), panel, 3.0);
-  return { chosen: pick, active, idle, glow: active };
+  const idle = readable(mix(panel, onLight ? '#000000' : '#ffffff', 0.42), panel, 3.0);
+  return { chosen: pick, active, idle, panel, line: mix(panel, onLight ? '#000000' : '#ffffff', 0.10), glow: active, dark: !onLight };
 }
 
 export function buildDiscTheme(color) {
@@ -183,7 +188,7 @@ export function buildRingTheme(lyrics, disc) {
 // A single palette object the app hands to the disc renderer; changes when any colour changes.
 export function buildThemes(design) {
   const app = buildAppTheme(design.app, design.appAccent);
-  const lyrics = buildLyricsTheme(design.lyrics, app);
+  const lyrics = buildLyricsTheme(design.lyrics);
   const disc = buildDiscTheme(design.disc);
   return { app, lyrics, disc, ring: buildRingTheme(lyrics, disc) };
 }

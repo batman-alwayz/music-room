@@ -34,6 +34,13 @@
     -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
     padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 120px);
     overflow-x:hidden;
+    /* a soft glow behind everything, tinted by the app theme: gives the flat page a sense of depth */
+    background-color:var(--ui-bg);
+    background-image:
+      radial-gradient(120% 80% at 50% -12%, color-mix(in srgb,var(--ui-accent) 17%,transparent), transparent 60%),
+      radial-gradient(80% 55% at 88% 108%, color-mix(in srgb,var(--ui-accent) 10%,transparent), transparent 68%);
+    background-attachment:fixed;
+    background-repeat:no-repeat;
   }
   h1,h2,h3{margin:0}
   ::selection{background:var(--ui-accent);color:var(--ui-accent-ink)}
@@ -89,6 +96,22 @@
 
   .row{display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--ui-line);padding:12px 0}
   .row:last-child{border-bottom:0}
+  .row.dim{opacity:.72}
+  .row.dim:hover{opacity:1}
+  /* a friendly, centred placeholder so an empty panel still looks designed */
+  .empty{
+    display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;
+    padding:38px 22px;margin:6px 0;border:1px dashed var(--ui-line);border-radius:var(--r-lg);
+    background:color-mix(in srgb,var(--ui-soft) 55%,transparent);
+  }
+  .empty .t{font-size:16px}
+  .empty .s{max-width:34ch}
+  .emptyIco{
+    width:52px;height:52px;border-radius:50%;display:grid;place-items:center;margin-bottom:4px;
+    font-size:22px;color:var(--ui-accent);
+    background:color-mix(in srgb,var(--ui-accent) 14%,transparent);
+    box-shadow:0 0 0 1px color-mix(in srgb,var(--ui-accent) 22%,transparent) inset;
+  }
   img{border-radius:10px}
 
   /* ---- screens ---- */
@@ -365,6 +388,10 @@
       <div id="tab-queue" class="tabpanel">
         <div class="eyebrow" style="margin:6px 0">Up next</div>
         <div id="queue"></div>
+        <div id="histwrap" hidden>
+          <div class="eyebrow" style="margin:22px 0 6px">Played earlier</div>
+          <div id="hist"></div>
+        </div>
       </div>
 
       <div id="tab-lyrics" class="tabpanel">
@@ -425,6 +452,11 @@
         <label id="spplayrow" class="s" hidden style="display:block;margin-top:12px"><input type="checkbox" id="spplay">Play the room's songs on my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
         <label id="spwhererow" class="s" hidden style="display:block;margin-top:10px">Play Spotify songs: <select id="spwhere"><option value="app">in my Spotify app on this device (recommended)</option><option value="browser">in this browser (no app needed)</option></select></label>
         <label id="spsharerow" class="s" hidden style="display:block;margin-top:10px"><input type="checkbox" id="spshare">Add songs I play or queue on Spotify to the room queue (the room can see what you play)</label>
+        <div id="spdevrow" class="s" hidden style="margin-top:10px">Play on:
+          <select id="spdev"></select>
+          <button id="spdevrefresh" class="btn ghost small" type="button">Refresh</button>
+          <div id="spdevhint" class="s" style="margin-top:4px"></div>
+        </div>
         <div id="splist"></div>
       </div>
       <div class="card" id="ggcard">

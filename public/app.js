@@ -21,7 +21,7 @@ let me, player, yt, spot = null, spApiObj = null, vinyl, loop, ws, ready = false
 let spLink = { connected: false, hasId: false }, spTok = null, spExp = 0, warnedSp = false;
 let curLyr = null, lastLyrI = -1, seekDrag = false;
 let spotifyPos = null, spotifyPosAt = 0, spotifyIsPlaying = false;
-let spotifyObserved = null, spotifyStateBusy = false, spotifyEchoUntil = 0;
+let spotifyObserved = null, spotifyStateBusy = false, spotifyEchoUntil = 0, spotifySource = false;
 let ggLink = { connected: false, hasId: false, idOk: false }, syncing = false, fails = 0, peopleTimer = null, lastShared = null, spQueuePrev = null;
 let stage = null, spotKind = '', shapeId = 'pixel';
 const roomSpUris = new Set();
@@ -56,8 +56,8 @@ function applyDesign() {
   root.setProperty('--ui-shadow', app.shadow);
   root.setProperty('--ly-active', lyrics.active);
   root.setProperty('--ly-idle', lyrics.idle);
-  root.setProperty('--ly-panel', app.panel);
-  root.setProperty('--ly-line', app.line);
+  root.setProperty('--ly-panel', lyrics.panel);
+  root.setProperty('--ly-line', lyrics.line);
   root.setProperty('--ly-glow', lyrics.glow);
   root.setProperty('--disc-vinyl', disc.vinyl);
   root.setProperty('--disc-rim', disc.rim);
@@ -251,7 +251,7 @@ function leaveRoom() {
   closeWS(); clearTimers();
   pauseAll();
   room = null; S = fresh();
-  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false;
+  spotifyObserved = null; spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false; spotifySource = false;
   history.replaceState(null, '', location.pathname);
   show('lobby'); loadLobby();
 }
@@ -283,6 +283,7 @@ function onFrame({ s, now }) {
   if ((S.playing?.tid || null) !== lastVinylTid) {           // new song on the record
     lastVinylTid = S.playing?.tid || null;
     spotifyPos = null; spotifyPosAt = 0; spotifyIsPlaying = false; spotifyObserved = null;
+    spotifySource = false;
     vinyl.setTrack(S.playing); stage.setTrack(S.playing); stage.setLyrics(null);
     curLyr = null; lastLyrI = -1; renderLyrics();
     if (S.playing) loadLyrics(S.playing);
@@ -407,9 +408,14 @@ async function loadLyrics(t) {
 // The single source of truth for "where are we in the song". Spotify's own clock wins while it is
 // the player (the room clock can drift from it, especially after device switches); otherwise the
 // room clock drives the progress bar, the lyrics and the record alike.
+const SPOTIFY_FRESH_MS = 6000;                               // four poll cycles: older than this, Spotify has gone quiet
 const songMs = () => {
   if (!S.playing) return 0;
-  if (spotifyPlayback() && spotifyPos != null) {
+  // Spotify's own clock is the truth whenever Spotify is playing this song, even if it is the app on
+  // the person's phone rather than this browser: the room clock would drift away from what they hear.
+  // A stale reading is ignored, so closing Spotify falls back to the room clock instead of running on.
+  const fresh = spotifyPos != null && Date.now() - spotifyPosAt < SPOTIFY_FRESH_MS;
+  if ((spotifyPlayback() || spotifySource) && fresh) {
     const dur = S.playing.dur * 1000;
     const p = spotifyPos + (spotifyIsPlaying ? Math.max(0, Date.now() - spotifyPosAt) : 0);
     return Math.max(0, Math.min(dur, p));
@@ -468,13 +474,22 @@ async function observeSpotifyState(st, fromSdk = false) {
   spotifyIsPlaying = !st.paused;
   spotifyObserved = st;
 
-  // no room song to mirror, or Spotify is not the player here: just keep the clock fresh
-  if (!room || !S.playing || !spotifyPlayback() || !st.trackId || st.source === 'ad') return;
-  if (!prev || prev.trackId !== st.trackId) return;             // establish a baseline; don't hijack a newly joined room
+  // no room song to mirror, or no Spotify track: just keep the clock fresh
+  if (!room || !S.playing || !st.trackId || st.source === 'ad') return;
+  if (!spOn()) return;                                          // the person switched "play on my Spotify" off
   if (Date.now() < spotifyEchoUntil) return;                    // a change we just sent ourselves
 
+  // Which device is playing? The person may be driving the room from the Spotify app on their phone
+  // while this browser is only watching. Follow the song the room is on, whoever started it: only
+  // mirror controls for the room's current track, never for unrelated music of their own.
   const uri = await findUri(spApiObj, S.playing).catch(() => null);
-  if (!uri || (st.uri && st.uri !== uri)) return;               // only mirror controls for the room's current song
+  if (!uri || (st.uri && st.uri !== uri)) { spotifySource = false; return; }
+  spotifySource = true;                                         // Spotify is playing the room's song: trust its clock
+
+  // A newly seen track needs one sample to establish a baseline, unless we already know this track is
+  // the room's song (then an immediate pause/seek is the person's own doing and must be honoured).
+  const known = prev && prev.trackId === st.trackId;
+  if (!known && !roomSpUris.has(st.uri)) return;
 
   if (st.paused !== S.paused) {                                 // pause / resume in Spotify
     send({ t: st.paused ? 'pause' : 'resume' });
@@ -490,7 +505,7 @@ async function observeSpotifyState(st, fromSdk = false) {
 }
 
 async function pollSpotifyState() {
-  if (!room || !spOn() || !spotifyPlayback() || !spot?.state || spotifyStateBusy) return;
+  if (!room || !spOn() || !spot?.state || spotifyStateBusy) return;
   spotifyStateBusy = true;
   try { await observeSpotifyState(await spot.state()); }
   catch {} finally { spotifyStateBusy = false; }
@@ -560,8 +575,10 @@ async function renderSp() {                                   // the Spotify car
   $('#spplayrow').hidden = !spLink.connected;
   $('#spsharerow').hidden = !spLink.connected;
   $('#spwhererow').hidden = !spLink.connected;
+  $('#spdevrow').hidden = !spLink.connected;
   $('#spswitch').hidden = !spLink.connected;
   $('#spwhere').value = spWhere();
+  if (spLink.connected) renderSpDevices();
   $('#spplay').checked = store.get('spplay') !== '0';
   $('#spshare').checked = store.get('spshare') === '1';
   $('#spstat').textContent = setupNote('Spotify', spLink)
@@ -575,6 +592,32 @@ async function renderSp() {                                   // the Spotify car
     list.append(h('div', { class: 'row' }, h('div', { style: 'flex:1;min-width:0' }, h('div', {}, p.name), h('div', { class: 's' }, `${p.n} song${p.n === 1 ? '' : 's'}${p.owned === false ? ' · followed' : ''}`)), btn));
   }
 }
+async function renderSpDevices(force = false) {              // where the room's Spotify sound comes out
+  const sel = $('#spdev'); if (!sel) return;
+  if (!spApiObj) spApiObj = spApi(getSpToken);
+  if (spotKind !== 'app') {                                  // the in-browser player is a device of its own
+    $('#spdevhint').textContent = 'Songs play inside this browser tab.';
+    sel.replaceChildren(h('option', {}, 'This browser'));
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  const list = await spot?.devices?.(force).catch(() => null);
+  if (!list) { sel.replaceChildren(h('option', {}, 'Loading…')); return; }
+  if (!list.length) {
+    sel.replaceChildren(h('option', {}, 'No Spotify device found'));
+    $('#spdevhint').textContent = 'Open Spotify on the device you want, press play once, then Refresh.';
+    return;
+  }
+  const cur = spot.deviceId?.() || store.get('spdev');
+  sel.replaceChildren(...list.map(d => h('option', { value: d.id, selected: d.id === cur },
+    `${d.name}${d.type ? ' · ' + d.type : ''}${d.is_active ? ' (playing now)' : ''}`)));
+  const active = list.find(d => d.is_active);
+  $('#spdevhint').textContent = active
+    ? `Playing on ${active.name} right now — the room follows it automatically.`
+    : 'The room follows whichever device is playing.';
+}
+
 async function renderGg() {                                   // the YouTube Music card
   const list = $('#gglist'); if (!list) return;
   list.replaceChildren();
@@ -755,7 +798,12 @@ function render() {
 
   $('#qtab').textContent = `Queue${S.queue.length ? ` (${S.queue.length})` : ''}`;
   const qEl = $('#queue'); qEl.replaceChildren();
-  if (!S.queue.length) qEl.append(h('div', { class: 's' }, 'Nothing queued yet'));
+  if (!S.queue.length) {
+    qEl.append(h('div', { class: 'empty' },
+      h('div', { class: 'emptyIco' }, '♪'),
+      h('div', { class: 't' }, 'The queue is empty'),
+      h('div', { class: 's' }, 'Search for a song and add it, or play something in Spotify and it lands here.')));
+  }
   S.queue.forEach((q, i) => {
     const mine = q.by === me.id || admin;
     qEl.append(h('div', { class: 'row' },
@@ -775,6 +823,17 @@ function render() {
   const left = lastItems.filter(t => !inRoom(t.tid)).length;
   $('#addall').disabled = !left;
   $('#resinfo').textContent = left ? `${left} not queued yet` : 'All of these are queued';
+
+  // played earlier: the room remembers the last 20 songs, so the panel is never just a bare heading
+  const hist = [...(S.hist || [])].reverse().slice(0, 8);
+  $('#histwrap').hidden = !hist.length;
+  const hEl = $('#hist'); hEl.replaceChildren();
+  for (const t of hist) {
+    hEl.append(h('div', { class: 'row dim' },
+      t.cover && h('img', { src: t.cover, width: '40', height: '30', style: 'border-radius:6px;object-fit:cover' }),
+      h('div', { style: 'flex:1;min-width:0' }, h('div', {}, t.title), h('div', { class: 's' }, t.artist || '')),
+      h('button', { class: 'btn ghost', title: 'Add it again', onclick: () => send({ t: 'add', ...trackOf(t) }) }, '↺')));
+  }
 }
 
 setInterval(() => {                                          // countdown / paused hint
@@ -995,7 +1054,9 @@ function wire() {
     store.set('spplay', e.target.checked ? '1' : '0');
     if (e.target.checked) { setupSpot(); warnedSp = false; toast(spWhere() === 'browser' ? 'Spotify songs will play in this browser' : 'Open the Spotify app on this device before the next song'); }
   });
-  on('spwhere', 'change', e => { store.set('spwhere', e.target.value); setupSpot(); });
+  on('spwhere', 'change', e => { store.set('spwhere', e.target.value); setupSpot(); renderSpDevices(true); });
+  on('spdev', 'change', e => { store.set('spdev', e.target.value); spot?.setDevice?.(e.target.value); toast('The room will play on that Spotify device'); });
+  on('spdevrefresh', 'click', () => renderSpDevices(true));
   on('lyrfull', 'click', () => {                                   // the lyric video, full screen
     const el = $('#lstage'), full = el.classList.toggle('full');
     $('#lyrfull').textContent = full ? '✕ Close' : '⛶ Full screen';
@@ -1075,6 +1136,7 @@ async function init() {
     sbox.append(h('button', { class: 'shp' + (sh.id === shapeId ? ' on' : ''), title: sh.name, 'data-shape': sh.id, onclick: () => {
       shapeId = sh.id; store.set('shape', sh.id);
       sbox.querySelectorAll('.shp').forEach(b => b.classList.toggle('on', b.dataset.shape === sh.id));
+      vinyl.fit();                                             // each shape reaches a different distance: refit so it still fills the frame
     } }, h('i', { class: sh.id })));
   }
   vinyl = createVinyl($('#vinyl'), $('#vinylhi'), {

@@ -39,6 +39,19 @@ export async function findUri(api, t) {
   return best;
 }
 
+// Where the sound should come out. Spotify returns its device list in no useful order, so we rank it:
+// a computer or a phone is a better target than a speaker or a TV. Restricted devices cannot accept a
+// play command at all, so they are never chosen.
+const DEVICE_RANK = { Computer: 0, Smartphone: 1, Tablet: 2, Speaker: 3, TV: 4 };
+export const usableDevice = d => !!(d && d.id && !d.is_restricted);
+export const bestDevice = list => {
+  const ok = (list || []).filter(usableDevice);
+  if (!ok.length) return null;
+  const active = ok.find(d => d.is_active);                 // something is already playing: follow it
+  if (active) return active;
+  return ok.slice().sort((a, b) => (DEVICE_RANK[a.type] ?? 9) - (DEVICE_RANK[b.type] ?? 9))[0];
+};
+
 // same shape as the YouTube players: position / seek / play / pause / setMuted / end / cancel
 export const connect = api => {
   let timer = null, device = null, prevVol = null, devicesAt = 0, devList = [];
@@ -48,11 +61,16 @@ export const connect = api => {
     devList = r?.devices || []; devicesAt = Date.now();
     return devList;
   };
+  // the chosen device outlives the page, so a reload keeps playing where you left it
+  const remembered = () => { try { return localStorage.getItem('sp:device'); } catch { return null; } };
+  const remember = id => { try { if (id) localStorage.setItem('sp:device', id); } catch {} };
   const pick = async force => {
     const l = await cacheDevices(force);
-    // the device that is already playing wins; otherwise the one we used last; otherwise any usable one
-    const d = l.find(x => x.is_active) || l.find(x => x.id === device) || l.find(x => !x.is_restricted);
-    if (d?.id) device = d.id;
+    const d = l.find(x => usableDevice(x) && x.is_active)     // whatever is playing right now wins
+      || l.find(x => usableDevice(x) && x.id === remembered())// then the device this browser used last
+      || l.find(x => usableDevice(x) && x.id === device)
+      || bestDevice(l);
+    if (d?.id) { device = d.id; remember(device); }
     return device;
   };
   const q = () => `device_id=${device}`;
@@ -72,6 +90,10 @@ export const connect = api => {
   }) : null;
   return {
     ready: async () => !!(await pick()),                     // false = open the Spotify app first
+    devices: async force => (await cacheDevices(force)).filter(usableDevice)
+      .sort((a, b) => (DEVICE_RANK[a.type] ?? 9) - (DEVICE_RANK[b.type] ?? 9)),
+    deviceId: () => device,
+    setDevice: id => { device = id; remember(id); cached = null; cachedAt = 0; },
     state: async () => snapshot(await read(true)),
     position: async () => {
       const s = await read();
