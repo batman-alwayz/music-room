@@ -2,8 +2,19 @@
 //   1. a chunky pixel disc (80x80 pixels shown big) in one of six shapes, or a smooth circle
 //   2. a sharp layer on top: the album cover as the round label, and the lyrics, which move:
 //      words hop as they are sung, and lines blow in and out like wind.
+// Every colour comes from a theme object (see theme.js) so the record can be re-tinted on its own.
 const N = 80, CX = 39.5, CY = 39.5, RD = 38, RL = 13;
+// every shape reaches this far from the centre along its axes, in disc pixels (measured, not guessed).
+// Scaling so this lands on the round frame's edge fills the frame exactly: a shape's flat edges touch
+// the frame and its corners (a square's, say) are neatly trimmed by the circle.
+const DISC_REACH = 39;
 const PI = Math.PI, TAU = 2 * PI;
+
+// default palette: used until the app hands one over, and by the tests
+export const DEFAULT_DISC = {
+  bg: '#020309', vinyl: '#0a1024', groove: '#7ba6e8', sheen: '#5fa8e8', rim: '#4c8cd2',
+  rim2: '#1e4682', label: '#0b3b63', label2: '#2b9fd0', spindle: '#7b89a6'
+};
 
 // the six discs. ts = how much of the disc is usable for a round lyric ring (corners waste space)
 export const SHAPES = [
@@ -39,23 +50,42 @@ function metricOf(id) {
   return metrics[id];
 }
 
+// ---------- colour helpers (local, so the renderer has no dependency on the theme module) ----------
+export function hexToRgb(hex) {
+  let s = String(hex || '').replace('#', '');
+  if (s.length === 3) s = s.split('').map(c => c + c).join('');
+  const n = parseInt(/^[0-9a-f]{6}$/i.test(s) ? s : '000000', 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+export function shade(hex, k) {                             // k>1 lighter, k<1 darker
+  const [r, g, b] = hexToRgb(hex);
+  const f = v => Math.max(0, Math.min(255, Math.round(v * k)));
+  return [f(r), f(g), f(b)];
+}
+export function mixRgb(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
 // ---------- layer 1: the pixel disc (pure: fills `px`) ----------
-export function renderPixels(px, rot, shape = 'pixel') {
+export function renderPixels(px, rot, shape = 'pixel', theme = DEFAULT_DISC) {
   const M = metricOf(shape), c2 = Math.cos(2 * rot), s2 = Math.sin(2 * rot);
+  const bg = hexToRgb(theme.bg), vinyl = hexToRgb(theme.vinyl), sheen = hexToRgb(theme.sheen);
+  const rim = hexToRgb(theme.rim), rim2 = hexToRgb(theme.rim2), gap = shade(theme.vinyl, 0.4), lab = shade(theme.vinyl, 0.5);
   for (let i = 0, p = 0; i < N * N; i++, p += 4) {
     const m = M[i];
-    let rr = 2, gg = 3, bb = 9;                              // OLED black with a hint of blue
+    let rr = bg[0], gg = bg[1], bb = bg[2];
     if (m <= RD + 0.5) {
-      if (m > RD - 1) { rr = 70; gg = 140; bb = 210; }       // outer rim line
-      else if (m > RD - 2.5) { rr = 5; gg = 9; bb = 22; }    // dark gap
-      else if (m > RD - 3.5) { rr = 30; gg = 70; bb = 130; } // inner rim line
+      if (m > RD - 1) { rr = rim[0]; gg = rim[1]; bb = rim[2]; }          // outer rim line
+      else if (m > RD - 2.5) { rr = gap[0]; gg = gap[1]; bb = gap[2]; }   // dark gap
+      else if (m > RD - 3.5) { rr = rim2[0]; gg = rim2[1]; bb = rim2[2]; }// inner rim line
       else {
-        const base = 5 + ((m | 0) % 4 === 0 ? 3 : 0);        // faint grooves (they follow the shape)
+        const base = 0.35 + ((m | 0) % 4 === 0 ? 0.22 : 0);               // faint grooves that follow the shape
         const s = C2[i] * c2 + S2[i] * s2;
-        const sh = s > 0 ? Math.floor(s * s * s * s * 4) / 4 : 0;   // two light reflections, in flat steps
+        const sh = s > 0 ? Math.floor(s * s * s * s * 4) / 4 : 0;         // two light reflections, in flat steps
         const f = (0.35 + 0.65 * Math.min(1, m / RD)) * sh;
-        rr = base + 14 * f; gg = base * 1.8 + 60 * f; bb = base * 4 + 95 * f;
-        if (R[i] < RL) { rr = 4; gg = 8; bb = 20; }          // the smooth label sits on top of this
+        const c = mixRgb(vinyl, sheen, Math.min(1, f * 0.85));
+        rr = c[0] * base; gg = c[1] * base; bb = c[2] * base;
+        if (R[i] < RL) { rr = lab[0]; gg = lab[1]; bb = lab[2]; }         // the smooth label sits on top of this
       }
     }
     px[p] = rr; px[p + 1] = gg; px[p + 2] = bb; px[p + 3] = 255;
@@ -202,14 +232,15 @@ export function buildLine(ctx, text, Rr, t0, t1, now) {
 
 // glyph sprites: the outline + the letter, drawn once per size and colour
 const sprites = new Map();
-const COLORS = [['rgba(2,10,22,0.96)', '#8ffcff'], ['rgba(2,10,22,0.96)', '#ffffff'], ['rgba(2,10,22,0.8)', '#4c9db0']];   // normal, sung/active, still to come
+let RING = [['rgba(2,10,22,0.96)', '#8ffcff'], ['rgba(2,10,22,0.96)', '#ffffff'], ['rgba(2,10,22,0.8)', '#4c9db0']];
+export function setRingColors(ring) { if (Array.isArray(ring) && ring.length === 3) { RING = ring; sprites.clear(); } }
 function sprite(ch, p, variant) {
-  const key = ch + '|' + Math.round(p * 20) + '|' + variant;
+  const key = ch + '|' + Math.round(p * 20) + '|' + variant + '|' + RING[variant][1];
   let s = sprites.get(key); if (s) return s;
   const o = Math.ceil(p * 0.55) + 1, w = Math.ceil(5 * p + 2 * o), h = Math.ceil(7 * p + 2 * o);
   const c = mkc(w, h), x = c.getContext('2d'), g = GLYPH[ch] || GLYPH['?'];
   for (const pass of [0, 1]) {
-    x.fillStyle = COLORS[variant][pass]; const e = pass ? 0 : p * 0.55;
+    x.fillStyle = RING[variant][pass]; const e = pass ? 0 : p * 0.55;
     for (let yy = 0; yy < 7; yy++) for (let xx = 0; xx < 5; xx++) if (g[yy * 5 + xx] === '1') x.fillRect(o + xx * p - e, o + yy * p - e, p + 0.35 + 2 * e, p + 0.35 + 2 * e);
   }
   s = { c, w, h }; sprites.set(key, s); return s;
@@ -223,9 +254,14 @@ function sparkle(ctx, x, y, s, a) {                            // a small four-p
 
 // draws the line that is entering/being sung (out = false) or the one blowing away (out = true).
 // the context is already at the centre of the record
+// The idle "wind" ripple runs on playback time, not wall time, so it freezes the moment the
+// music pauses instead of drifting on forever under a stopped record.
+export const windPhase = (paused, now, pauseAt) => (paused ? (pauseAt ?? now) : now);
+
 function drawAnim(ctx, ln, st, out) {
   const Rr = ln.R, timed = ln.t0 != null;
   const age = st.now - (out ? ln.died : ln.born);
+  const wind = windPhase(st.paused, st.now, st.pauseAt);      // frozen while paused: the record really stops
   const p = out || !timed ? (out ? 1 : -1) : clamp((st.songMs - ln.t0) / Math.max(500, ln.t1 - ln.t0));
   let sparkleAt = null;
   ln.letters.forEach((L, i) => {
@@ -243,20 +279,20 @@ function drawAnim(ctx, ln, st, out) {
         else variant = 2;
       }
     }
-    dr += 0.011 * Rr * Math.sin(st.now * 0.0028 + i * 0.6);   // the wind: a slow ripple that always runs along the line
-    dAng += 0.004 * Math.sin(st.now * 0.0021 + i * 0.9);
+    dr += 0.011 * Rr * Math.sin(wind * 0.0028 + i * 0.6);   // the wind: a slow ripple along the line
+    dAng += 0.004 * Math.sin(wind * 0.0021 + i * 0.9);
     ctx.save(); ctx.rotate(L.ang + dAng); ctx.translate(0, -(L.r + dr)); if (sc !== 1) ctx.scale(sc, sc); ctx.globalAlpha = a;
     if (L.block) { const s = sprite(L.ch, L.p, variant); ctx.drawImage(s.c, -s.w / 2, -s.h / 2); }
     else {
       ctx.font = FONT(L.px); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'miter'; ctx.miterLimit = 2;
-      ctx.lineWidth = L.px * 0.2; ctx.strokeStyle = COLORS[variant][0]; ctx.strokeText(L.ch, 0, 0);
-      ctx.fillStyle = COLORS[variant][1]; ctx.fillText(L.ch, 0, 0);
+      ctx.lineWidth = L.px * 0.2; ctx.strokeStyle = RING[variant][0]; ctx.strokeText(L.ch, 0, 0);
+      ctx.fillStyle = RING[variant][1]; ctx.fillText(L.ch, 0, 0);
     }
     ctx.restore();
   });
   if (sparkleAt && !out) {                                     // a twinkle above the word being sung
     ctx.save(); ctx.rotate(sparkleAt.ang);
-    sparkle(ctx, 0, -(sparkleAt.r + 0.2 * Rr), Rr * 0.05, 0.55 + 0.45 * Math.sin(st.now * 0.014));
+    sparkle(ctx, 0, -(sparkleAt.r + 0.2 * Rr), Rr * 0.05, 0.55 + 0.45 * Math.sin(wind * 0.014));
     ctx.restore();
   }
 }
@@ -264,54 +300,63 @@ function drawAnim(ctx, ln, st, out) {
 // a few thin arcs sweep clockwise right after the line changes
 function drawGust(ctx, Rr, st) {
   const age = st.now - st.gustAt; if (!(age >= 0 && age < 720)) return;
-  const k = age / 720;
+  const k = age / 720, c = hexToRgb(RING[1][1]);
   ctx.save(); ctx.lineCap = 'round'; ctx.lineWidth = Math.max(1, Rr * 0.011);
   for (let j = 0; j < 5; j++) {
     const r = Rr * (0.52 + 0.075 * j + 0.02 * Math.sin(j * 7.3)), a0 = -PI / 2 - 1.1 + k * 2.3 + j * 0.16, len = 0.55 + 0.1 * j;
-    ctx.strokeStyle = `rgba(143,252,255,${(1 - k) * 0.32})`; ctx.beginPath(); ctx.arc(0, 0, r, a0, a0 + len); ctx.stroke();
+    ctx.strokeStyle = `rgba(${c[0]},${c[1]},${c[2]},${(1 - k) * 0.32})`; ctx.beginPath(); ctx.arc(0, 0, r, a0, a0 + len); ctx.stroke();
   }
   ctx.restore();
 }
 
 // ---------- layer 2: smooth disc (the "Circle" shape), cover label, lyrics ----------
 const bodies = new Map();
-function discBody(W) {                                         // rim + grooves, drawn once per size
-  if (bodies.has(W)) return bodies.get(W);
+const bodyKey = (W, theme) => W + '|' + (theme?.vinyl || '') + (theme?.rim || '') + (theme?.groove || '');
+function discBody(W, theme = DEFAULT_DISC) {                   // rim + grooves, drawn once per size and theme
+  const key = bodyKey(W, theme);
+  if (bodies.has(key)) return bodies.get(key);
   const c = mkc(W), x = c.getContext('2d'), C = W / 2, Rr = (RD / N) * W;
-  const g = x.createRadialGradient(C, C, Rr * 0.1, C, C, Rr); g.addColorStop(0, '#05091a'); g.addColorStop(1, '#080f22');
+  const g = x.createRadialGradient(C, C, Rr * 0.08, C, C, Rr);
+  const inner = shade(theme.vinyl, 0.72);
+  g.addColorStop(0, theme.vinyl); g.addColorStop(0.72, `rgb(${inner[0]},${inner[1]},${inner[2]})`); g.addColorStop(1, theme.vinyl);
   x.fillStyle = g; x.beginPath(); x.arc(C, C, Rr * 0.985, 0, TAU); x.fill();
-  x.lineWidth = Math.max(1, Rr * 0.006);
-  for (let r = Rr * 0.2, k = 0; r < Rr * 0.9; r += Rr * 0.032, k++) { x.strokeStyle = k % 4 === 0 ? 'rgba(120,170,255,0.08)' : 'rgba(120,170,255,0.03)'; x.beginPath(); x.arc(C, C, r, 0, TAU); x.stroke(); }
-  x.lineWidth = Rr * 0.026; x.strokeStyle = 'rgb(70,140,210)'; x.beginPath(); x.arc(C, C, Rr * 0.987, 0, TAU); x.stroke();
-  x.strokeStyle = 'rgb(30,70,130)'; x.beginPath(); x.arc(C, C, Rr * 0.92, 0, TAU); x.stroke();
-  bodies.clear(); bodies.set(W, c); return c;
+  const gcol = hexToRgb(theme.groove);
+  x.lineWidth = Math.max(1, Rr * 0.005);
+  for (let r = Rr * 0.2, k = 0; r < Rr * 0.9; r += Rr * 0.028, k++) {   // fine grooves, a touch denser than before
+    x.strokeStyle = `rgba(${gcol[0]},${gcol[1]},${gcol[2]},${k % 4 === 0 ? 0.1 : 0.035})`;
+    x.beginPath(); x.arc(C, C, r, 0, TAU); x.stroke();
+  }
+  x.lineWidth = Rr * 0.024; x.strokeStyle = theme.rim; x.beginPath(); x.arc(C, C, Rr * 0.988, 0, TAU); x.stroke();
+  x.strokeStyle = theme.rim2; x.beginPath(); x.arc(C, C, Rr * 0.918, 0, TAU); x.stroke();
+  bodies.clear(); bodies.set(key, c); return c;
 }
-function sheen(ctx, W, rot) {                                  // two light reflections that sweep round as it spins
-  const Rr = (RD / N) * W;
+function sheen(ctx, W, rot, theme = DEFAULT_DISC) {            // two light reflections that sweep round as it spins
+  const Rr = (RD / N) * W, c = hexToRgb(theme.sheen);
   ctx.save(); ctx.translate(W / 2, W / 2); ctx.rotate(rot);
   for (const a of [0, PI]) {
     const g = ctx.createRadialGradient(0, 0, Rr * 0.2, 0, 0, Rr * 0.92);
-    g.addColorStop(0, 'rgba(70,160,230,0)'); g.addColorStop(0.7, 'rgba(70,160,230,0.22)'); g.addColorStop(1, 'rgba(70,160,230,0.08)');
+    g.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},0)`); g.addColorStop(0.68, `rgba(${c[0]},${c[1]},${c[2]},0.24)`); g.addColorStop(1, `rgba(${c[0]},${c[1]},${c[2]},0.09)`);
     ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, Rr * 0.92, a - 0.3, a + 0.3); ctx.closePath(); ctx.fill();
   }
   ctx.restore();
 }
 
-// st: { rot, spin, shape, cover, cur, out, now, songMs, gustAt }
+// st: { rot, spin, shape, cover, cur, out, now, songMs, gustAt, theme }
 export function drawOverlay(ctx, W, st) {
+  const theme = st.theme || DEFAULT_DISC;
   const c = W / 2, ts = st.shape?.ts ?? 1, Rr = (RD / N) * W * ts, rl = Rr * 0.335;
   ctx.clearRect(0, 0, W, W);
-  if (st.shape?.smooth) { ctx.drawImage(discBody(W), 0, 0); sheen(ctx, W, st.rot); }
+  if (st.shape?.smooth) { ctx.drawImage(discBody(W, theme), 0, 0); sheen(ctx, W, st.rot, theme); }
   ctx.save(); ctx.translate(c, c); ctx.rotate(st.rot);         // album cover = the label, turning with the record
   ctx.beginPath(); ctx.arc(0, 0, rl, 0, TAU); ctx.closePath();
   ctx.save(); ctx.clip();
   if (st.cover) { ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high'; ctx.drawImage(st.cover, -rl, -rl, 2 * rl, 2 * rl); }
-  else { const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rl); g.addColorStop(0, '#2b9fd0'); g.addColorStop(1, '#0b3b63'); ctx.fillStyle = g; ctx.fill(); }
+  else { const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rl); g.addColorStop(0, theme.label2); g.addColorStop(1, theme.label); ctx.fillStyle = g; ctx.fill(); }
   ctx.restore();
-  ctx.lineWidth = Math.max(1, Rr * 0.014); ctx.strokeStyle = '#0a1830'; ctx.stroke();
+  ctx.lineWidth = Math.max(1, Rr * 0.013); ctx.strokeStyle = theme.label; ctx.stroke();
   ctx.restore();
-  ctx.beginPath(); ctx.arc(c, c, Rr * 0.034, 0, TAU); ctx.fillStyle = '#020309'; ctx.fill();   // spindle hole
-  ctx.lineWidth = Math.max(1, Rr * 0.012); ctx.strokeStyle = '#7b89a6'; ctx.stroke();
+  ctx.beginPath(); ctx.arc(c, c, Rr * 0.032, 0, TAU); ctx.fillStyle = theme.bg; ctx.fill();   // spindle hole
+  ctx.lineWidth = Math.max(1, Rr * 0.011); ctx.strokeStyle = theme.spindle; ctx.stroke();
   ctx.save(); ctx.translate(c, c); if (st.spin) ctx.rotate(st.rot);
   if (st.out) drawAnim(ctx, st.out, st, true);
   if (st.cur) drawAnim(ctx, st.cur, st, false);
@@ -320,14 +365,16 @@ export function drawOverlay(ctx, W, st) {
 }
 
 // ---------- the player widget ----------
-// api: { time(): ms into the song, offset(): lyric nudge in ms, playing(): bool, spin(): bool, big(): bool, shape(): id }
+// api: { time(): ms into the song, offset(): lyric nudge in ms, playing(): bool, spin(): bool, big(): bool, shape(): id, theme(): object }
 export function createVinyl(canvas, overlay, api) {
   const ctx = canvas.getContext('2d');
-  const img = ctx.createImageData(N, N);
   const octx = overlay.getContext('2d');
   const cov = document.createElement('canvas'); cov.width = cov.height = 384;
-  let rot = 0, speed = 0, last = 0, running = false, W = 0;
+  let rot = 0, speed = 0, last = 0, running = false, W = 0, pauseAt = null;
   let track = null, lyr = null, haveCover = false, coverToken = 0, key = '', cur = null, out = null, gustAt = -1e9;
+  let cachedPx = null, cachedPxKey = '';                       // pixel disc drawn only when shape/theme changes
+
+  const theme = () => api.theme?.() || DEFAULT_DISC;
 
   function line(t) {                                         // what to show now: { text, t0, t1 } (t0 null = no timing)
     if (!track) return { text: 'No song playing', t0: null };
@@ -351,8 +398,7 @@ export function createVinyl(canvas, overlay, api) {
       const im = new Image(); im.src = url; await im.decode();
       URL.revokeObjectURL(url);
       if (token !== coverToken) return;
-      const wide = im.width / im.height > 1.5;               // 16:9 (sharp art) or a 4:3 thumbnail with black bars
-      const side = wide ? im.height : im.height * 0.75;
+      const side = Math.min(im.width, im.height);            // largest centred square: square art is untouched, wide art is centre-cropped
       const x = cov.getContext('2d');
       x.clearRect(0, 0, 384, 384); x.imageSmoothingQuality = 'high';
       x.drawImage(im, (im.width - side) / 2, (im.height - side) / 2, side, side, 0, 0, 384, 384);
@@ -360,17 +406,39 @@ export function createVinyl(canvas, overlay, api) {
     } catch {}
   }
 
+  // The pixel disc is pure per-pixel shading; doing it every frame at 60fps is the main source of
+  // visual lag on phones. Draw it once per (shape, theme) into an offscreen canvas, then just rotate it.
+  function discCanvas(shape) {
+    const t = theme();
+    const k = shape.id + '|' + t.vinyl + t.rim + t.sheen + t.bg;
+    if (k === cachedPxKey && cachedPx) return cachedPx;
+    const c = mkc(N, N), x = c.getContext('2d'), im = x.createImageData(N, N);
+    renderPixels(im.data, 0, shape.id, t);
+    x.putImageData(im, 0, 0);
+    cachedPx = c; cachedPxKey = k; return c;
+  }
+
   function frame(now) {
     if (!running) return;
     requestAnimationFrame(frame);
     const dt = Math.min(0.05, (now - (last || now)) / 1000); last = now;
-    speed += ((api.playing() ? 0.68 : 0) - speed) * Math.min(1, dt * 2.5);   // slightly quicker spin; eases to a stop when paused
+    // slightly quicker, and it eases to a stop when paused / back up to speed when playback resumes
+    const target = api.playing() ? 1.15 : 0;
+    speed += (target - speed) * Math.min(1, dt * (target > speed ? 5.5 : 3.2));
+    // exponential easing only approaches zero, so snap the last sliver: a paused record is truly still
+    if (target === 0 && speed < 0.004) speed = 0;
     rot = (rot + speed * dt) % TAU;
 
     const shape = SHAPES.find(s => s.id === api.shape?.()) || SHAPES[1];
-    if (shape.smooth) { ctx.fillStyle = '#020309'; ctx.fillRect(0, 0, N, N); }
-    else { renderPixels(img.data, rot, shape.id); ctx.putImageData(img, 0, 0); }
+    if (shape.smooth) { ctx.fillStyle = theme().bg; ctx.fillRect(0, 0, N, N); }
+    else {
+      const src = discCanvas(shape);
+      ctx.save(); ctx.translate(N / 2, N / 2); ctx.rotate(rot); ctx.translate(-N / 2, -N / 2);
+      ctx.drawImage(src, 0, 0); ctx.restore();
+    }
 
+    const playing = !!api.playing();
+    if (!playing) { if (pauseAt == null) pauseAt = now; } else pauseAt = null;
     const t = api.time() + (api.offset?.() || 0), L = line(t);
     const k = L.text + '|' + L.t0 + '|' + W + '|' + shape.id;
     if (k !== lineKey()) {                                   // a new line: the old one blows away, the new one blows in
@@ -380,16 +448,16 @@ export function createVinyl(canvas, overlay, api) {
       cur = buildLine(octx, L.text, (RD / N) * W * shape.ts, L.t0, L.t1, now);
     }
     if (out && now - out.died > 420 + out.letters.length * 12 + 60) out = null;
-    drawOverlay(octx, W, { rot, spin: api.spin(), shape, cover: haveCover ? cov : null, cur, out, now, songMs: t, gustAt });
+    drawOverlay(octx, W, { rot, spin: api.spin(), shape, cover: haveCover ? cov : null, cur, out, now, paused: !playing, pauseAt, songMs: t, gustAt, theme: theme() });
   }
   const lineKey = () => key;
 
   // size: the pixel disc at a whole number of screen pixels per disc pixel; the sharp layer matches it exactly
   function fit() {
-    const w = Math.floor(canvas.parentElement.clientWidth - 16);
-    const narrow = matchMedia('(max-width:700px)').matches;
-    const css = narrow ? Math.max(120, w)                                   // phone: as big as the screen allows
-      : N * Math.min(api.big?.() ? 6 : 3, Math.max(2, Math.floor(w / N)));  // laptop: 3x, or 6x after a click
+    const frame = Math.max(96, canvas.parentElement.clientWidth || 300);
+    // fill the round frame without clipping: scale so this shape's widest point lands on the frame
+    // edge, keeping a whole number of screen pixels per disc pixel so the artwork stays crisp
+    const css = Math.max(96, frame * (N / 2) / DISC_REACH);   // the disc's edge lands exactly on the round frame
     canvas.style.width = canvas.style.height = overlay.style.width = overlay.style.height = css + 'px';
     const px = Math.round(css * Math.min(2, window.devicePixelRatio || 1));
     if (px !== W) { W = px; overlay.width = overlay.height = W; key = ''; }
@@ -402,6 +470,7 @@ export function createVinyl(canvas, overlay, api) {
     start() { if (!running) { running = true; last = 0; fit(); requestAnimationFrame(frame); } },
     stop() { running = false; },
     setTrack(t) { track = t || null; haveCover = false; lyr = null; coverToken++; key = ''; cur = out = null; if (t) loadCover(t.tid); },
-    setLyrics(l) { lyr = l || null; key = ''; cur = out = null; }
+    setLyrics(l) { lyr = l || null; key = ''; cur = out = null; },
+    setTheme() { cachedPxKey = ''; bodies.clear(); }              // colours changed: redraw the disc body next frame
   };
 }

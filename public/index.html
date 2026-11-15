@@ -3,35 +3,142 @@
 <meta charset="utf-8">
 <title>Room</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0c0d10">
+<meta name="theme-color" content="#f5f0e8">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Pacifico&family=Poppins:wght@700;800&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&family=Pacifico&family=Poppins:wght@700;800&display=swap">
 <style>
-  html{background:#0c0d10;color:#e9ebee;font:14px Inter,system-ui}
-  body{margin:0;padding:env(safe-area-inset-top) 14px calc(env(safe-area-inset-bottom) + 160px)}
-  .btn{background:#e9ebee;color:#0c0d10;border:0;border-radius:9px;padding:9px 14px;font:inherit;text-decoration:none;display:inline-block;cursor:pointer}
-  .btn:disabled{opacity:.4;cursor:default}
-  .ghost{background:#1a1d22;color:#e9ebee}
-  .row{display:flex;gap:8px;align-items:center;border-bottom:1px solid #1a1d22;padding:9px 0}
-  .t{font-size:18px;font-weight:600}.s{color:#8b9099;font-size:12px;margin-top:2px}.err{color:#ff8a8a}
-  .top{display:flex;gap:8px;align-items:center;padding:12px 0}
-  .card{background:#14161a;border-radius:12px;padding:12px;margin:10px 0}
-  input{width:100%;box-sizing:border-box;background:#14161a;color:inherit;border:1px solid #1a1d22;border-radius:9px;padding:10px;font:inherit;margin:6px 0}
-  #login{padding-top:22vh;max-width:320px;margin:0 auto}
+  /* =====================================================================
+     Room — design tokens. Every colour below is written by theme.js from the
+     three independent user themes (app / lyrics / disc), so the interface,
+     the lyrics and the record can be re-coloured without touching each other.
+     ===================================================================== */
+  :root{
+    --ui-bg:#f5f0e8; --ui-panel:#fffdf8; --ui-soft:#efe8dd; --ui-ink:#252729; --ui-muted:#77736d;
+    --ui-line:#e7dfd4; --ui-accent:#c96e50; --ui-accent-ink:#fff; --ui-shadow:#34291b;
+    --ly-active:#c96e50; --ly-idle:#aaa39a; --ly-panel:#fffdf8; --ly-line:#e7dfd4; --ly-glow:#c96e50;
+    --disc-vinyl:#101014; --disc-rim:#8a93a3; --disc-groove:#9aa6bb; --disc-sheen:#5fa8e8; --disc-label:#1b2740;
+    --r-xs:8px; --r-sm:12px; --r:16px; --r-lg:22px; --r-xl:28px; --pill:999px;
+    --gap:16px; --pad:16px; --tap:44px;
+    --ease:cubic-bezier(.22,.61,.36,1);
+    color-scheme:light;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  html,body{background:var(--ui-bg);color:var(--ui-ink)}
+  body{
+    margin:0;font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+    padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 120px);
+    overflow-x:hidden;
+    /* a soft glow behind everything, tinted by the app theme: gives the flat page a sense of depth */
+    background-color:var(--ui-bg);
+    background-image:
+      radial-gradient(120% 80% at 50% -12%, color-mix(in srgb,var(--ui-accent) 17%,transparent), transparent 60%),
+      radial-gradient(80% 55% at 88% 108%, color-mix(in srgb,var(--ui-accent) 10%,transparent), transparent 68%);
+    background-attachment:fixed;
+    background-repeat:no-repeat;
+  }
+  h1,h2,h3{margin:0}
+  ::selection{background:var(--ui-accent);color:var(--ui-accent-ink)}
 
-  /* ---- room layout: player | tabs (queue gets its own column on wide screens) ---- */
-  .main{display:grid;gap:18px;grid-template-columns:minmax(0,1fr);max-width:1400px;margin:0 auto}
-  .tabbar{display:flex;gap:6px;margin-bottom:8px}
-  .tabbtn{background:#14161a;color:#8b9099;border:0;border-radius:99px;padding:8px 14px;font:inherit;cursor:pointer}
-  .tabbtn.on{background:#e9ebee;color:#0c0d10}
+  /* ---- type ---- */
+  .t{font-weight:650;letter-spacing:-.028em;line-height:1.2}
+  .s{color:var(--ui-muted);font-size:13px;line-height:1.45}
+  .err{color:#e0533f}
+  .eyebrow{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--ui-muted)}
+
+  /* ---- surfaces & controls ---- */
+  .card,.sheet{
+    background:var(--ui-panel);border:1px solid var(--ui-line);border-radius:var(--r-lg);
+    box-shadow:0 1px 2px color-mix(in srgb,var(--ui-shadow) 6%,transparent),0 18px 40px -24px color-mix(in srgb,var(--ui-shadow) 34%,transparent);
+  }
+  .card{padding:18px;margin:14px 0}
+  .btn{
+    appearance:none;border:0;background:var(--ui-ink);color:var(--ui-bg);border-radius:var(--pill);
+    padding:12px 20px;font:inherit;font-weight:600;letter-spacing:-.01em;cursor:pointer;text-decoration:none;
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:var(--tap);
+    transition:transform .14s var(--ease),background .18s var(--ease),opacity .18s var(--ease),box-shadow .18s var(--ease);
+  }
+  .btn:hover{transform:translateY(-1px)}
+  .btn:active{transform:scale(.97)}
+  .btn:disabled{opacity:.4;cursor:default;transform:none}
+  .btn.ghost{background:var(--ui-soft);color:var(--ui-ink)}
+  .btn.small{padding:9px 15px;min-height:40px;font-size:13px}
+  .btn.green{background:#1db954;color:#04130a}
+  .btn.red{background:#ff0033;color:#fff}
+  .linkbtn{background:none;border:0;color:var(--ui-muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font:inherit;display:block;margin:20px auto 0}
+  .chip{background:var(--ui-soft);border:1px solid transparent;border-radius:var(--pill);padding:6px 12px;font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:6px;cursor:pointer;text-decoration:none;color:var(--ui-ink)}
+  .chip.ok{background:color-mix(in srgb,var(--ui-accent) 14%,var(--ui-panel));color:var(--ui-accent);border-color:color-mix(in srgb,var(--ui-accent) 30%,transparent)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+
+  input,textarea,select{
+    width:100%;background:var(--ui-panel);color:var(--ui-ink);border:1px solid var(--ui-line);
+    border-radius:var(--r-sm);padding:12px 14px;font:inherit;margin:8px 0;
+    transition:border-color .18s var(--ease),box-shadow .18s var(--ease);
+  }
+  input:focus,textarea:focus,select:focus{outline:0;border-color:var(--ui-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 22%,transparent)}
+  textarea{min-height:130px;resize:vertical}
+  input[type=checkbox]{width:auto;margin:0 8px 0 0;accent-color:var(--ui-accent);vertical-align:middle}
+  input[type=color]{width:52px;height:44px;padding:4px;border-radius:var(--r-sm);background:var(--ui-panel);cursor:pointer}
+  input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;padding:0;margin:0;cursor:pointer;height:24px}
+  input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:var(--pill);background:color-mix(in srgb,var(--ui-ink) 18%,transparent)}
+  input[type=range]::-moz-range-track{height:5px;border-radius:var(--pill);background:color-mix(in srgb,var(--ui-ink) 18%,transparent)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;margin-top:-6px;border-radius:50%;background:var(--ui-accent);border:2px solid var(--ui-panel);box-shadow:0 2px 6px color-mix(in srgb,var(--ui-shadow) 40%,transparent)}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border:2px solid var(--ui-panel);border-radius:50%;background:var(--ui-accent)}
+  input[type=range]:disabled{opacity:.4;cursor:default}
+  #seek{flex:1}
+  #seek::-webkit-slider-runnable-track{height:4px}
+  #seek::-webkit-slider-thumb{width:14px;height:14px;margin-top:-5px}
+
+  .row{display:flex;gap:12px;align-items:center;border-bottom:1px solid var(--ui-line);padding:12px 0}
+  .row:last-child{border-bottom:0}
+  .row.dim{opacity:.72}
+  .row.dim:hover{opacity:1}
+  /* a friendly, centred placeholder so an empty panel still looks designed */
+  .empty{
+    display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;
+    padding:38px 22px;margin:6px 0;border:1px dashed var(--ui-line);border-radius:var(--r-lg);
+    background:color-mix(in srgb,var(--ui-soft) 55%,transparent);
+  }
+  .empty .t{font-size:16px}
+  .empty .s{max-width:34ch}
+  .emptyIco{
+    width:52px;height:52px;border-radius:50%;display:grid;place-items:center;margin-bottom:4px;
+    font-size:22px;color:var(--ui-accent);
+    background:color-mix(in srgb,var(--ui-accent) 14%,transparent);
+    box-shadow:0 0 0 1px color-mix(in srgb,var(--ui-accent) 22%,transparent) inset;
+  }
+  img{border-radius:10px}
+
+  /* ---- screens ---- */
+  .top{display:flex;gap:10px;align-items:center;padding:14px 0}
+  #room>.top{position:sticky;top:0;z-index:6;background:color-mix(in srgb,var(--ui-bg) 88%,transparent);backdrop-filter:blur(14px)}
+  #login{padding-top:20vh;max-width:340px;margin:0 auto}
+  #login .t{font-size:34px;margin-bottom:14px}
+  .conn{max-width:380px;margin:14vh auto 0;text-align:center}
+  .conn .t{font-size:30px;margin-bottom:8px}
+  .cbtn{display:block;width:100%;margin-top:12px;padding:16px;font-size:16px;border-radius:var(--r)}
+  .cnote{text-align:center;min-height:16px;margin:4px 0 0}
+
+  /* ---- layout: tabs | record | queue on wide screens ---- */
+  .main{display:grid;gap:22px;grid-template-columns:minmax(0,1fr);max-width:1440px;margin:0 auto}
+  .tabsarea{min-width:0}
+  .tabbar{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+  .tabbtn{appearance:none;border:0;background:var(--ui-soft);color:var(--ui-muted);border-radius:var(--pill);padding:9px 16px;font:inherit;font-weight:600;cursor:pointer;transition:background .18s var(--ease),color .18s var(--ease)}
+  .tabbtn.on{background:var(--ui-ink);color:var(--ui-bg)}
   .tabpanel{display:none}
-  .tabsarea[data-tab="search"] #tab-search,.tabsarea[data-tab="queue"] #tab-queue,.tabsarea[data-tab="pls"] #tab-pls,.tabsarea[data-tab="lyrics"] #tab-lyrics,.tabsarea[data-tab="people"] #tab-people{display:block}
-  @media (min-width:1050px){                            /* laptop: search/lyrics/playlists | THE DISC IN THE CENTRE | queue */
-    .main{grid-template-columns:minmax(300px,1fr) minmax(400px,520px) minmax(300px,1fr);align-items:start}
-    body.bigdisc .main{grid-template-columns:minmax(260px,1fr) minmax(640px,680px) minmax(260px,1fr)}
+  .tabsarea[data-tab="search"] #tab-search,
+  .tabsarea[data-tab="queue"] #tab-queue,
+  .tabsarea[data-tab="pls"] #tab-pls,
+  .tabsarea[data-tab="lyrics"] #tab-lyrics,
+  .tabsarea[data-tab="people"] #tab-people{display:block}
+  @media (min-width:1080px){
+    .main{grid-template-columns:minmax(300px,1fr) minmax(420px,540px) minmax(300px,1fr);align-items:start}
+    body.bigdisc .main{grid-template-columns:minmax(240px,1fr) minmax(640px,720px) minmax(240px,1fr)}
     .tabsarea{display:contents}
     .left{grid-column:2;grid-row:1 / span 8}
     .tabbar{grid-column:1;grid-row:1}
@@ -40,187 +147,169 @@
     .tabbtn[data-tab="queue"]{display:none}
   }
 
-  /* ---- the golden cuboid with an OLED screen ---- */
-  .stage{perspective:1300px;display:flex;justify-content:center;padding:30px 0 32px;position:relative}
-  .stage::after{content:"";position:absolute;left:14%;right:14%;bottom:8px;height:22px;background:radial-gradient(#000a,transparent 70%);filter:blur(7px)}
-  .box{--d:30px;position:relative;width:min(94vw,340px);transform-style:preserve-3d;transition:width .25s;
-       transform:rotateX(-10deg) rotateY(-15deg);animation:sway 9s ease-in-out infinite alternate}
-  @keyframes sway{from{transform:rotateX(-10deg) rotateY(-17deg)}to{transform:rotateX(-8deg) rotateY(-11deg)}}
-  @keyframes sway-s{from{transform:rotateX(-7deg) rotateY(-9deg)}to{transform:rotateX(-6deg) rotateY(-5deg)}}
-  @media (max-width:600px){.box{--d:22px;animation-name:sway-s}}
-  @media (prefers-reduced-motion:reduce){.box{animation:none}}
+  /* ---- the record ---- */
+  .stage{display:flex;justify-content:center;padding:18px 0 10px;position:relative}
+  .box{position:relative;width:min(84vw,380px);transition:width .28s var(--ease)}
   .face{position:absolute}
-  .front{position:relative;border-radius:16px;padding:14px;
-    background:linear-gradient(145deg,#fff1b8 0%,#f0c75e 22%,#c9922f 55%,#e8bd5a 78%,#9c6c1c 100%);
-    box-shadow:inset 0 0 0 2px #fff4c488,inset 0 -14px 24px #7a4f0f55,inset 0 12px 20px #fff7d855}
-  .topf{left:0;bottom:100%;width:100%;height:var(--d);transform-origin:bottom;transform:rotateX(90deg);
-    background:linear-gradient(#fff6cf,#e8bf58);border-radius:16px 16px 0 0}
-  .rightf{top:0;left:100%;width:var(--d);height:100%;transform-origin:left;transform:rotateY(90deg);
-    background:linear-gradient(90deg,#c8942f,#7d5413);border-radius:0 16px 16px 0}
-  .screen{position:relative;background:#02030a;border-radius:12px;padding:8px;display:grid;place-items:center;
-    box-shadow:inset 0 0 26px #000,0 0 0 2px #5b3d0c,0 0 0 4px #ffe9a866}
-  .screen::after{content:"";position:absolute;inset:0;border-radius:12px;pointer-events:none;
-    background:linear-gradient(120deg,#ffffff18 0%,#ffffff06 30%,transparent 42%)}
-  #vinyl,#vinylhi{grid-area:1/1;display:block}
-  #vinyl{image-rendering:pixelated}
-  #vinylhi{pointer-events:none;filter:drop-shadow(0 0 2px #38d4ff55)}
-  .screen{cursor:zoom-in}
-  body.bigdisc .box{width:min(94vw,600px)}
-  body.bigdisc .screen{cursor:zoom-out}
-  .led{position:absolute;right:22px;bottom:4px;width:6px;height:6px;border-radius:50%;background:#7dfaff;box-shadow:0 0 8px #7dfaff}
-
-  @media (max-width:700px){                          /* phone: the record is as big as the screen, controls right under it */
-    body{padding-left:8px;padding-right:8px}
-    .stage{padding:18px 0 22px}.box{width:100% !important}.front{padding:8px}.screen{padding:4px;cursor:default}
+  .front{position:relative;border-radius:50%}
+  .topf,.rightf,.led{display:none}
+  .screen{
+    width:100%;aspect-ratio:1;border-radius:50%;padding:0;overflow:hidden;position:relative;
+    background:var(--disc-vinyl);
+    box-shadow:
+      0 26px 60px -26px color-mix(in srgb,var(--ui-shadow) 62%,transparent),
+      0 0 0 10px var(--ui-panel),
+      0 0 0 11px var(--ui-line);
+    cursor:zoom-in;transition:box-shadow .3s var(--ease);
   }
-  #seekrow{display:flex;gap:8px;align-items:center;padding:4px 2px}
-  #seekrow span{font-size:12px;color:#8b9099;min-width:36px;text-align:center}
-  input[type=range]{padding:0;border:0;background:transparent;margin:0;accent-color:#5ff3ff;cursor:pointer}
-  input[type=range]:disabled{opacity:.4;cursor:default}
-  input[type=checkbox]{width:auto;margin:0 6px 0 0}
-  textarea{width:100%;box-sizing:border-box;min-height:120px;background:#14161a;color:inherit;border:1px solid #1a1d22;border-radius:9px;padding:10px;font:inherit;margin:6px 0}
-  .lstage{position:relative;width:100%;aspect-ratio:16/10;border-radius:14px;overflow:hidden;background:#140a14;margin-bottom:10px}
+  .screen::after{content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+    background:linear-gradient(125deg,rgba(255,255,255,.14) 0%,rgba(255,255,255,.03) 26%,transparent 44%)}
+  #vinyl,#vinylhi{display:block;position:absolute;inset:0;width:100%;height:100%}
+  #vinyl{image-rendering:auto}
+  #vinylhi{pointer-events:none}
+  body.bigdisc .box{width:min(92vw,640px)}
+  body.bigdisc .screen{cursor:zoom-out}
+
+  /* ---- transport ---- */
+  #np{padding:14px 6px 2px;text-align:center}
+  #np .t{font-size:20px}
+  #seekrow{display:flex;gap:12px;align-items:center;max-width:560px;margin:12px auto 0;padding:0 2px}
+  #seekrow span{font-size:12px;font-variant-numeric:tabular-nums;color:var(--ui-muted);min-width:40px;text-align:center}
+  #ctl{display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;padding:14px 0 6px}
+  .tbtn{
+    width:52px;height:52px;border-radius:50%;border:1px solid var(--ui-line);background:var(--ui-panel);color:var(--ui-ink);
+    display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
+    transition:transform .14s var(--ease),background .18s var(--ease),border-color .18s var(--ease),box-shadow .18s var(--ease);
+    box-shadow:0 4px 14px -8px color-mix(in srgb,var(--ui-shadow) 50%,transparent);
+  }
+  .tbtn:hover:not(:disabled){transform:translateY(-2px);border-color:color-mix(in srgb,var(--ui-accent) 45%,var(--ui-line))}
+  .tbtn:active:not(:disabled){transform:scale(.94)}
+  .tbtn:disabled{opacity:.34;cursor:default}
+  .tbtn .ic{width:22px;height:22px;display:block}
+  .tbtn .ic svg{width:100%;height:100%;display:block}
+  .tbtn.primary{width:68px;height:68px;border-color:transparent;color:var(--ui-accent-ink);
+    background:var(--ui-accent);box-shadow:0 10px 26px -10px color-mix(in srgb,var(--ui-accent) 80%,transparent)}
+  .tbtn.primary .ic{width:28px;height:28px}
+  .tbtn.primary:hover:not(:disabled){background:color-mix(in srgb,var(--ui-accent) 86%,#fff)}
+  #ctl .btn.small{font-size:12px;padding:8px 13px;min-height:40px}
+  #armbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;padding:6px 0}
+  #drift{font-variant-numeric:tabular-nums}
+
+  /* ---- lyric video stage ---- */
+  .lstage{position:relative;width:100%;aspect-ratio:16/10;border-radius:var(--r-lg);overflow:hidden;background:#141018;margin-bottom:14px}
   .lstage canvas{width:100%;height:100%;display:block}
-  .lstage .lfull{position:absolute;right:10px;bottom:10px;background:#0008;color:#fff;border:0;border-radius:99px;padding:7px 12px;font:inherit;font-size:12px;cursor:pointer}
+  .lstage .lfull{position:absolute;right:12px;bottom:12px;background:rgba(0,0,0,.5);color:#fff;border:0;border-radius:var(--pill);padding:9px 14px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px)}
   .lstage.full{position:fixed;inset:0;z-index:40;border-radius:0;aspect-ratio:auto;margin:0}
-  #shapes{display:flex;gap:8px;justify-content:center;padding:4px 0 2px}
-  .shp{width:34px;height:34px;border:2px solid #2a2f3a;border-radius:10px;background:#14161a;display:grid;place-items:center;cursor:pointer;padding:0}
-  .shp.on{border-color:#5ff3ff}
-  .shp i{display:block;width:17px;height:17px;background:#6aa8e8}
-  .shp i.circle{border-radius:50%}.shp i.pixel{clip-path:polygon(30% 0,70% 0,70% 10%,90% 10%,90% 30%,100% 30%,100% 70%,90% 70%,90% 90%,70% 90%,70% 100%,30% 100%,30% 90%,10% 90%,10% 70%,0 70%,0 30%,10% 30%,10% 10%,30% 10%)}
+
+  /* ---- shapes ---- */
+  #shapes{display:flex;gap:10px;justify-content:center;padding:10px 0 2px;flex-wrap:wrap}
+  .shp{width:40px;height:40px;border:1px solid var(--ui-line);border-radius:var(--r-sm);background:var(--ui-panel);display:grid;place-items:center;cursor:pointer;padding:0;transition:border-color .18s var(--ease),transform .14s var(--ease)}
+  .shp:hover{transform:translateY(-1px)}
+  .shp.on{border-color:var(--ui-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 20%,transparent)}
+  .shp i{display:block;width:18px;height:18px;background:var(--ui-muted)}
+  .shp.on i{background:var(--ui-accent)}
+  .shp i.circle{border-radius:50%}
+  .shp i.pixel{clip-path:polygon(30% 0,70% 0,70% 10%,90% 10%,90% 30%,100% 30%,100% 70%,90% 70%,90% 90%,70% 90%,70% 100%,30% 100%,30% 90%,10% 90%,10% 70%,0 70%,0 30%,10% 30%,10% 10%,30% 10%)}
   .shp i.diamond{clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
   .shp i.hexagon{clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%)}
   .shp i.octagon{clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}
-  .shp i.square{border-radius:4px}
-  #lyrlist{position:relative;max-height:58vh;overflow:auto;padding:6px 2px}
-  .lyrline{padding:7px 0;color:#6b7280;font-size:16px;line-height:1.35;transition:color .2s,font-size .2s}
-  .lyrline.on{color:#8ffcff;font-size:21px;font-weight:600}
-  .conn{max-width:360px;margin:15vh auto 0}
-  .cbtn{display:block;width:100%;box-sizing:border-box;text-align:center;padding:15px;font-size:16px;font-weight:600;border-radius:12px;margin-top:10px}
-  .green{background:#1db954;color:#04130a}.red{background:#ff0033;color:#fff}
-  .cnote{text-align:center;min-height:15px}
-  .linkbtn{background:none;border:0;color:#8b9099;text-decoration:underline;cursor:pointer;font:inherit;display:block;margin:18px auto 0}
-  a.chip,button.chip{text-decoration:none;color:inherit;border:0;font:inherit;font-size:12px;cursor:pointer}
-  .chip.ok{background:#12301f;color:#7dffb0}
-  .dot{width:9px;height:9px;border-radius:50%;background:#444;flex:none}.dot.on{background:#3ddc84}
-  #np{padding:4px 0;text-align:center}
-  #ctl{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;padding:6px 0}
-  #ctl .btn{font-size:18px;min-width:48px}
-  #ctl .btn.small{font-size:13px;min-width:0}
-  /* modern circular transport controls */
-  #ctl{gap:14px}
-  .tbtn{width:50px;height:50px;border-radius:50%;border:1px solid #262b33;background:#161a1f;color:#cfd4db;
-        display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
-        transition:transform .12s,background .12s,border-color .12s}
-  .tbtn:hover:not(:disabled){background:#1d222a;border-color:#333a45;transform:translateY(-1px)}
-  .tbtn:active:not(:disabled){transform:scale(.94)}
-  .tbtn:disabled{opacity:.35;cursor:default}
-  .tbtn .ic{width:22px;height:22px;display:block}
-  .tbtn .ic svg{width:100%;height:100%;display:block}
-  .tbtn.primary{width:64px;height:64px;border-color:transparent;color:#062028;
-        background:linear-gradient(145deg,#7ff7ff,#38d4ff);box-shadow:0 6px 18px #38d4ff33}
-  .tbtn.primary .ic{width:26px;height:26px}
-  .tbtn.primary:hover:not(:disabled){background:linear-gradient(145deg,#93f9ff,#4fdcff)}
-  #armbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;padding:6px 0}
-  .chips{display:flex;gap:6px;flex-wrap:wrap}.chip{background:#1a1d22;border-radius:99px;padding:3px 9px;font-size:12px}
+  .shp i.square{border-radius:5px}
 
-  #overlay{position:fixed;inset:0;background:#000a;display:flex;align-items:flex-end;justify-content:center;z-index:10}
-  #overlay[hidden]{display:none}
-  .sheet{background:#14161a;width:100%;max-width:420px;border-radius:16px 16px 0 0;padding:16px;display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto;box-sizing:border-box;padding-bottom:calc(env(safe-area-inset-bottom) + 16px)}
-  #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 20px);background:#e9ebee;color:#0c0d10;padding:8px 14px;border-radius:99px;z-index:20;max-width:90vw}
-  #toast[hidden]{display:none}
-  #webwrap{position:fixed;right:10px;bottom:calc(env(safe-area-inset-bottom) + 10px);transition:right .2s}
-  #webwrap.min{opacity:0;pointer-events:none}        /* invisible but still on screen, so the browser keeps playing the audio */
-
-  /* Music Room — warm, minimal, mobile-first design */
-  :root{--ui-bg:#f5f0e8;--ui-panel:#fffdf8;--ui-ink:#252729;--ui-muted:#77736d;--ui-line:#e7dfd4;--ui-accent:#c96e50;--ui-lyric:#c96e50;--ui-disc-hue:0deg;color-scheme:light}
-  html,body{background:var(--ui-bg);color:var(--ui-ink)}
-  body{font-family:Inter,ui-sans-serif,system-ui,sans-serif;padding-bottom:calc(env(safe-area-inset-bottom) + 104px)}
-  .top{padding:14px 2px}
-  .t{font-weight:650;letter-spacing:-.025em}
-  .s{color:var(--ui-muted)}
-  .card,.sheet{background:var(--ui-panel);border:1px solid var(--ui-line);border-radius:18px;box-shadow:0 8px 24px #34291b0a}
-  .btn{background:var(--ui-ink);color:#fff;border-radius:999px;padding:10px 16px;font-weight:600}
-  .ghost,.tabbtn{background:#eee8df;color:var(--ui-ink)}
-  .tabbtn.on{background:var(--ui-ink);color:#fff}
-  input,textarea{background:var(--ui-panel);color:var(--ui-ink);border:1px solid var(--ui-line);border-radius:12px}
-  input[type=range]{accent-color:var(--ui-accent)}
-  .row{border-color:var(--ui-line)}
-  .chip{background:#eee8df;color:var(--ui-ink)}
-  .chip.ok{background:#e4f0e5;color:#315f3c}
-  .main{gap:20px}
-  .stage{padding:20px 0 12px}
-  .stage::after{bottom:2px;opacity:.18}
-  .box{width:min(86vw,360px);transform:none!important;animation:none!important}
-  .front{padding:0;background:transparent;box-shadow:none}
-  .topf,.rightf,.led{display:none}
-  .screen{width:100%;box-sizing:border-box;aspect-ratio:1;border-radius:50%;padding:0;background:#1d2022;overflow:hidden;
-    box-shadow:0 18px 42px #34291b22,0 0 0 9px #fffdf8,0 0 0 10px var(--ui-line)}
-  #vinyl{image-rendering:auto;filter:hue-rotate(var(--ui-disc-hue)) saturate(1.18)}
-  #vinylhi{filter:drop-shadow(0 1px 2px #0002)}
-  #seekrow{max-width:520px;margin:10px auto 0;gap:10px}
-  #seekrow span{color:var(--ui-muted)}
-  #np{padding:12px 8px 4px}
-  #np .t{font-size:20px}
-  #ctl{gap:12px;padding:12px 0}
-  #ctl .btn{min-width:46px;height:46px;border-radius:50%;font-size:17px}
-  #ctl .btn:nth-child(2){background:var(--ui-accent);color:white;min-width:58px;height:58px;font-size:22px}
-  #armbar{padding:8px 0}
-  #lyrlist{max-height:52vh;padding:20px 14px;border-radius:18px;background:var(--ui-panel);border:1px solid var(--ui-line);text-align:center;scroll-padding:45% 0}
-  .lyrline{padding:12px 8px;color:#aaa39a;font-size:17px;line-height:1.5;letter-spacing:-.015em;transition:color .25s,transform .25s,font-size .25s}
-  .lyrline.on{color:var(--ui-lyric);font-size:23px;font-weight:650;transform:scale(1.025)}
-  .lstage{background:#e9e0d5;border-radius:20px}
-  .lstage .lfull{background:#252729;color:white}
-  #lyrctl{justify-content:center}
-  #shapes{padding:10px 0}
-  .shp{background:var(--ui-panel);border-color:var(--ui-line)}
-  .shp.on{border-color:var(--ui-accent)}
-  .shp i{background:var(--ui-accent)}
-  #room>.top{position:sticky;top:0;z-index:5;background:var(--ui-bg)}
-  .tabbar{gap:6px;flex-wrap:wrap}
-  .tabsarea{min-width:0}
-  #tab-search,#tab-queue,#tab-pls,#tab-people,#tab-lyrics{padding-bottom:12px}
-  #mobileNav{display:none}
-  #designPanel{position:fixed;inset:0;z-index:35;background:#211d18a8;display:flex;align-items:flex-end;justify-content:center}
-  #designPanel[hidden]{display:none}
-  #designSheet{width:min(100%,520px);max-height:82dvh;overflow:auto;background:var(--ui-panel);color:var(--ui-ink);border-radius:24px 24px 0 0;padding:22px 20px calc(env(safe-area-inset-bottom) + 24px);box-sizing:border-box}
-  .designPick{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:13px 0;border-bottom:1px solid var(--ui-line)}
-  .designPick input[type=color]{width:48px;height:40px;padding:3px;border:1px solid var(--ui-line);border-radius:12px;background:var(--ui-panel)}
-  #designClose{float:right}
-  @media(max-width:700px){
-    body{padding-left:14px;padding-right:14px;padding-bottom:calc(env(safe-area-inset-bottom) + 104px)}
-    .main{display:block}
-    .stage{padding:14px 0 8px}
-    .box{width:min(78vw,340px)!important}
-    .front{padding:0}
-    .screen{padding:0}
-    .tabbar{display:none}
-    #mobileNav{position:fixed;display:flex;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 10px);z-index:25;
-      justify-content:space-around;gap:4px;padding:8px;background:#202224;color:#fff;border-radius:22px;
-      box-shadow:0 12px 34px #0002}
-    #mobileNav button{flex:1;min-width:0;border:0;background:transparent;color:#d4d0ca;border-radius:15px;padding:10px 3px;font:inherit;font-size:11px}
-    #mobileNav button.on{background:#fff;color:#252729}
-    #room>.top{margin:0 -2px}
-    #tab-lyrics{padding-bottom:20px}
-    #lyrlist{max-height:45dvh}
-    #ctl .btn.small{font-size:11px}
+  /* ---- lyrics list: the readable, cinematic column ---- */
+  #lyrlist{
+    position:relative;max-height:56vh;overflow:auto;padding:26px 18px;border-radius:var(--r-lg);
+    background:var(--ly-panel);border:1px solid var(--ly-line);text-align:center;
+    scroll-padding:45% 0;scrollbar-width:thin;
+    mask-image:linear-gradient(180deg,transparent 0,#000 9%,#000 91%,transparent 100%);
+    -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 9%,#000 91%,transparent 100%);
   }
-  @media(prefers-reduced-motion:reduce){.lyrline{transition:none}}
+  .lyrline{
+    padding:12px 10px;color:var(--ly-idle);font-size:17px;font-weight:500;line-height:1.45;letter-spacing:-.014em;
+    transition:color .28s var(--ease),transform .28s var(--ease),font-size .28s var(--ease),opacity .28s var(--ease);
+    opacity:.75;
+  }
+  .lyrline.on{
+    color:var(--ly-active);font-size:24px;font-weight:700;opacity:1;transform:scale(1.02);
+    text-shadow:0 0 22px color-mix(in srgb,var(--ly-glow) 34%,transparent);
+  }
+  #lyrctl{justify-content:center;gap:8px;flex-wrap:wrap;border:0}
+  #lyrinfo{flex:1;min-width:120px;text-align:left}
+  #lyrstat{text-align:center}
 
+  /* ---- queue / lists ---- */
+  #tab-search,#tab-queue,#tab-pls,#tab-people,#tab-lyrics{padding-bottom:14px}
+  #resbar{border:0}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--ui-line);flex:none}
+  .dot.on{background:#3ddc84;box-shadow:0 0 0 3px color-mix(in srgb,#3ddc84 24%,transparent)}
+
+  /* ---- overlays ---- */
+  #overlay{position:fixed;inset:0;background:color-mix(in srgb,var(--ui-shadow) 62%,transparent);display:flex;align-items:flex-end;justify-content:center;z-index:20;backdrop-filter:blur(2px)}
+  #overlay[hidden]{display:none}
+  .sheet{background:var(--ui-panel);width:100%;max-width:440px;border-radius:var(--r-xl) var(--r-xl) 0 0;padding:20px;display:flex;flex-direction:column;gap:10px;max-height:76vh;overflow:auto;padding-bottom:calc(env(safe-area-inset-bottom) + 22px)}
+  #toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 26px);background:var(--ui-ink);color:var(--ui-bg);padding:11px 18px;border-radius:var(--pill);z-index:30;max-width:90vw;font-size:13px;font-weight:600;box-shadow:0 12px 30px -12px color-mix(in srgb,var(--ui-shadow) 70%,transparent)}
+  #toast[hidden]{display:none}
+  #webwrap{position:fixed;right:12px;bottom:calc(env(safe-area-inset-bottom) + 12px);transition:opacity .25s var(--ease);z-index:8}
+  #webwrap.min{opacity:0;pointer-events:none}
+  #webplayer{border-radius:var(--r-sm);overflow:hidden}
+
+  /* ---- appearance panel ---- */
+  #designPanel{position:fixed;inset:0;z-index:35;background:color-mix(in srgb,var(--ui-shadow) 55%,transparent);display:flex;align-items:flex-end;justify-content:center}
+  #designPanel[hidden]{display:none}
+  #designSheet{width:min(100%,540px);max-height:86dvh;overflow:auto;background:var(--ui-panel);color:var(--ui-ink);
+    border-radius:var(--r-xl) var(--r-xl) 0 0;padding:22px 20px calc(env(safe-area-inset-bottom) + 26px)}
+  .designGroup{margin-top:20px}
+  .designGroup>.s{margin-bottom:8px}
+  .designPick{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;padding:12px 0;border-bottom:1px solid var(--ui-line)}
+  .designPick b{display:block;font-weight:650;letter-spacing:-.02em}
+  .swatches{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 2px}
+  .swatch{width:34px;height:34px;border-radius:50%;border:2px solid var(--ui-line);cursor:pointer;padding:0;transition:transform .14s var(--ease),border-color .18s var(--ease)}
+  .swatch:hover{transform:scale(1.08)}
+  .swatch.on{border-color:var(--ui-ink);box-shadow:0 0 0 3px color-mix(in srgb,var(--ui-accent) 26%,transparent)}
+  #designClose{float:right}
+
+  /* ---- mobile navigation ---- */
+  #mobileNav{display:none}
+  @media (max-width:720px){
+    body{padding-left:14px;padding-right:14px;padding-bottom:calc(env(safe-area-inset-bottom) + 112px)}
+    .main{display:block}
+    .tabbar{display:none}
+    .stage{padding:12px 0 6px}
+    .box{width:min(78vw,340px)!important}
+    #np .t{font-size:19px}
+    .tbtn{width:50px;height:50px}
+    .tbtn.primary{width:64px;height:64px}
+    #lyrlist{max-height:46dvh}
+    .lyrline{font-size:16px}
+    .lyrline.on{font-size:22px}
+    #mobileNav{
+      position:fixed;display:flex;left:12px;right:12px;bottom:calc(env(safe-area-inset-bottom) + 12px);z-index:25;
+      justify-content:space-around;gap:4px;padding:8px;background:var(--ui-ink);border-radius:var(--r-lg);
+      box-shadow:0 16px 40px -18px color-mix(in srgb,var(--ui-shadow) 80%,transparent);
+    }
+    #mobileNav button{flex:1;min-width:0;border:0;background:transparent;color:color-mix(in srgb,var(--ui-bg) 70%,transparent);
+      border-radius:var(--r-sm);padding:9px 3px;font:inherit;font-size:11px;font-weight:600;cursor:pointer;line-height:1.25}
+    #mobileNav button.on{background:var(--ui-accent);color:var(--ui-accent-ink)}
+    #room>.top{margin:0 -2px}
+    #seekrow{gap:10px}
+    .card{padding:16px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+  }
 </style>
 
 <div id="login" hidden>
-  <div class="t" style="margin-bottom:10px">Room</div>
+  <div class="t">Room</div>
   <input id="name" placeholder="Your name" autocomplete="nickname" maxlength="24">
   <input id="code" placeholder="Invite code" type="password" autocomplete="off">
-  <button id="join" class="btn" style="width:100%;margin-top:6px">Join</button>
+  <button id="join" class="btn" style="width:100%;margin-top:8px">Join</button>
   <div id="err" class="s err"></div>
 </div>
 
 <div id="connect" hidden>
   <div class="conn">
-    <div class="t" style="font-size:26px;text-align:center">Room</div>
-    <div class="s" style="text-align:center;margin:6px 0 20px">Listen together, in sync. Connect your music and your playlists come along.</div>
+    <div class="t">Room</div>
+    <div class="s" style="margin:6px 0 22px">Listen together, in sync. Connect your music and your playlists come along.</div>
     <a id="cSpotify" class="btn cbtn green" href="/auth/spotify/login">Connect Spotify</a>
     <div id="cSpotifyNote" class="s cnote"></div>
     <a id="cGoogle" class="btn cbtn red" href="/auth/google/login">Connect YT Music</a>
@@ -232,23 +321,23 @@
 
 <div id="lobby" hidden>
   <div class="top"><div class="t" style="flex:1">Room</div><a class="s" href="/auth/logout">Log out</a></div>
-  <div style="max-width:520px;margin:0 auto">
-    <div id="accts" class="chips" style="margin:4px 0 10px"></div>
-    <div id="syncbar" class="s" hidden style="margin-bottom:8px"></div>
+  <div style="max-width:560px;margin:0 auto">
+    <div id="accts" class="chips" style="margin:6px 0 12px"></div>
+    <div id="syncbar" class="s" hidden style="margin-bottom:10px"></div>
     <div class="card">
-      <div class="s">Create a room</div>
+      <div class="eyebrow">Create a room</div>
       <input id="rname" placeholder="Room name" maxlength="30">
       <button id="rcreate" class="btn">Create room</button>
     </div>
     <div class="card">
-      <div class="s">Join a room</div>
+      <div class="eyebrow">Join a room</div>
       <input id="rcode" placeholder="Room code (6 characters)" maxlength="6" autocapitalize="characters" autocomplete="off">
       <button id="rjoin" class="btn">Join room</button>
     </div>
     <div id="lerr" class="s err"></div>
-    <div class="s" style="margin-top:14px">My rooms</div>
+    <div class="eyebrow" style="margin-top:20px">My rooms</div>
     <div id="myrooms"></div>
-    <button id="toPls" class="btn ghost" style="margin-top:14px">♪ My playlists</button>
+    <button id="toPls" class="btn ghost" style="margin-top:16px">♪ My playlists</button>
   </div>
 </div>
 
@@ -265,20 +354,20 @@
       <div class="stage">
         <div class="box">
           <div class="face front">
-            <div class="screen" id="screen" title="Click the record to make it bigger (laptop)"><canvas id="vinyl" width="80" height="80"></canvas><canvas id="vinylhi"></canvas></div>
+            <div class="screen" id="screen" title="Click the record to make it bigger"><canvas id="vinyl" width="80" height="80"></canvas><canvas id="vinylhi"></canvas></div>
             <div class="led"></div>
           </div>
           <div class="face topf"></div>
           <div class="face rightf"></div>
         </div>
       </div>
-      <div id="seekrow"><span id="tcur">0:00</span><input id="seek" type="range" min="0" max="1000" value="0" step="1" disabled style="flex:1"><span id="tdur">0:00</span></div>
-      <div id="lyrstat" class="s" style="text-align:center"></div>
+      <div id="seekrow"><span id="tcur">0:00</span><input id="seek" type="range" min="0" max="1000" value="0" step="1" disabled><span id="tdur">0:00</span></div>
+      <div id="lyrstat" class="s" style="text-align:center;margin-top:8px"></div>
       <div id="shapes"></div>
       <div id="np"></div>
       <div id="ctl"></div>
       <div id="armbar"></div>
-      <button id="tap" class="btn" hidden style="width:100%;margin:6px 0">🔊 Tap here to turn the sound on</button>
+      <button id="tap" class="btn" hidden style="width:100%;margin:8px 0">🔊 Tap here to turn the sound on</button>
     </div>
 
     <div class="tabsarea" data-tab="search">
@@ -292,19 +381,23 @@
 
       <div id="tab-search" class="tabpanel">
         <input id="q" placeholder="Search a song or artist, or paste a YouTube link" enterkeyhint="search">
-        <div id="resbar" class="row" hidden style="border:0"><button id="addall" class="btn">＋ Add all</button><span id="resinfo" class="s"></span></div>
+        <div id="resbar" class="row" hidden><button id="addall" class="btn">＋ Add all</button><span id="resinfo" class="s"></span></div>
         <div id="results"></div>
       </div>
 
       <div id="tab-queue" class="tabpanel">
-        <div class="s" style="margin:4px 0">Up next</div>
+        <div class="eyebrow" style="margin:6px 0">Up next</div>
         <div id="queue"></div>
+        <div id="histwrap" hidden>
+          <div class="eyebrow" style="margin:22px 0 6px">Played earlier</div>
+          <div id="hist"></div>
+        </div>
       </div>
 
       <div id="tab-lyrics" class="tabpanel">
         <div class="lstage" id="lstage"><canvas id="lyrcanvas"></canvas><button id="lyrfull" class="lfull">⛶ Full screen</button></div>
-        <div id="lyrctl" class="row" hidden style="border:0;gap:6px;flex-wrap:wrap">
-          <span id="lyrinfo" class="s" style="flex:1"></span>
+        <div id="lyrctl" class="row" hidden>
+          <span id="lyrinfo" class="s"></span>
           <button id="lyrm" class="btn ghost small">Lyrics later</button>
           <button id="lyrp" class="btn ghost small">Lyrics earlier</button>
         </div>
@@ -317,10 +410,10 @@
       </div>
 
       <div id="tab-people" class="tabpanel">
-        <div class="s" style="margin:4px 0">In this room</div>
+        <div class="eyebrow" style="margin:6px 0">In this room</div>
         <div id="people"></div>
         <div id="blockedbox" hidden>
-          <div class="s" style="margin:14px 0 4px">Blocked (they cannot rejoin until you unblock them)</div>
+          <div class="eyebrow" style="margin:18px 0 6px">Blocked</div>
           <div id="blocked"></div>
         </div>
       </div>
@@ -332,7 +425,7 @@
           <div id="plerr2" class="s err"></div>
         </div>
         <div id="plmini"></div>
-        <button id="toPls2" class="btn ghost" style="margin-top:10px">Manage playlists</button>
+        <button id="toPls2" class="btn ghost" style="margin-top:12px">Manage playlists</button>
       </div>
     </div>
   </div>
@@ -340,7 +433,7 @@
 
 <div id="pls" hidden>
   <div class="top"><button id="plback" class="btn ghost">←</button><div class="t" style="flex:1">Playlists</div></div>
-  <div style="max-width:560px;margin:0 auto">
+  <div style="max-width:580px;margin:0 auto">
     <div id="plhome">
       <div class="card">
         <input id="plname" placeholder="New playlist name" maxlength="30">
@@ -349,22 +442,27 @@
       </div>
       <div id="pllist"></div>
       <div class="card" id="spcard">
-        <div class="t" style="font-size:16px">Spotify</div>
-        <div id="spstat" class="s"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <div class="t" style="font-size:17px">Spotify</div>
+        <div id="spstat" class="s" style="margin-top:4px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <a id="spconnect" class="btn" href="/auth/spotify/login" hidden>Connect Spotify</a>
           <a id="spswitch" class="btn ghost" href="/auth/spotify/login?switch=1" hidden>Use a different Spotify account</a>
           <button id="spdisc" class="btn ghost" hidden>Disconnect</button>
         </div>
-        <label id="spplayrow" class="s" hidden style="display:block;margin-top:8px"><input type="checkbox" id="spplay">Play the room's songs on my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
-        <label id="spwhererow" class="s" hidden style="display:block;margin-top:6px">Play Spotify songs: <select id="spwhere" style="background:#14161a;color:inherit;border:1px solid #2a2f3a;border-radius:8px;padding:6px"><option value="app">in my Spotify app on this device (recommended)</option><option value="browser">in this browser (no app needed)</option></select></label>
-        <label id="spsharerow" class="s" hidden style="display:block;margin-top:6px"><input type="checkbox" id="spshare">Add songs I play or queue on Spotify to the room queue (the room can see what you play)</label>
+        <label id="spplayrow" class="s" hidden style="display:block;margin-top:12px"><input type="checkbox" id="spplay">Play the room's songs on my Spotify (needs Premium and the Spotify app open) so they count in my Spotify history</label>
+        <label id="spwhererow" class="s" hidden style="display:block;margin-top:10px">Play Spotify songs: <select id="spwhere"><option value="app">in my Spotify app on this device (recommended)</option><option value="browser">in this browser (no app needed)</option></select></label>
+        <label id="spsharerow" class="s" hidden style="display:block;margin-top:10px"><input type="checkbox" id="spshare">Add songs I play or queue on Spotify to the room queue (the room can see what you play)</label>
+        <div id="spdevrow" class="s" hidden style="margin-top:10px">Play on:
+          <select id="spdev"></select>
+          <button id="spdevrefresh" class="btn ghost small" type="button">Refresh</button>
+          <div id="spdevhint" class="s" style="margin-top:4px"></div>
+        </div>
         <div id="splist"></div>
       </div>
       <div class="card" id="ggcard">
-        <div class="t" style="font-size:16px">YouTube Music</div>
-        <div id="ggstat" class="s"></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <div class="t" style="font-size:17px">YouTube Music</div>
+        <div id="ggstat" class="s" style="margin-top:4px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
           <a id="ggconnect" class="btn" href="/auth/google/login" hidden>Connect YT Music</a>
           <button id="ggdisc" class="btn ghost" hidden>Disconnect</button>
         </div>
@@ -381,12 +479,11 @@
       <input id="plrnin" hidden maxlength="30">
       <input id="plq" placeholder="Search a song to add to this playlist" enterkeyhint="search">
       <div id="plres"></div>
-      <div class="s" style="margin-top:10px">Songs</div>
+      <div class="eyebrow" style="margin-top:16px">Songs</div>
       <div id="pltracks"></div>
     </div>
   </div>
 </div>
-
 
 <nav id="mobileNav" aria-label="Main navigation">
   <button data-mobile-tab="search" class="on">⌕<br>Search</button>
@@ -395,15 +492,36 @@
   <button data-mobile-tab="people">◎<br>People</button>
   <button data-mobile-tab="pls">▤<br>Playlists</button>
 </nav>
+
 <div id="designPanel" hidden>
   <section id="designSheet" aria-label="Appearance settings">
-    <button id="designClose" class="btn ghost" type="button">Done</button>
-    <div class="t" style="font-size:22px;margin:4px 0 4px">Make it yours</div>
-    <div class="s">Choose three colors. Your choices stay on this device.</div>
-    <label class="designPick"><span><b>App color</b><div class="s">Main background and accents</div></span><input id="appColor" type="color" value="#f5f0e8"></label>
-    <label class="designPick"><span><b>Lyrics color</b><div class="s">Highlighted lyric line</div></span><input id="lyricsColor" type="color" value="#c96e50"></label>
-    <label class="designPick"><span><b>Disc color</b><div class="s">Record tint</div></span><input id="discColor" type="color" value="#c96e50"></label>
-    <button id="designReset" class="btn ghost" style="width:100%;margin-top:16px" type="button">Reset colors</button>
+    <button id="designClose" class="btn ghost small" type="button">Done</button>
+    <div class="t" style="font-size:24px">Make it yours</div>
+    <div class="s">Three separate themes. Change one and the others stay exactly as they are. Saved on this device.</div>
+
+    <div class="designGroup">
+      <div class="eyebrow">App theme</div>
+      <div class="s">The background, panels and controls of the whole app.</div>
+      <div class="swatches" id="appPresets"></div>
+      <label class="designPick"><span><b>Background</b><span class="s">Main surface colour</span></span><input id="appColor" type="color" value="#f5f0e8"></label>
+      <label class="designPick"><span><b>Accent</b><span class="s">Buttons, play control and highlights</span></span><input id="appAccentColor" type="color" value="#c96e50"></label>
+    </div>
+
+    <div class="designGroup">
+      <div class="eyebrow">Lyrics theme</div>
+      <div class="s">Only the lyrics — the sung line and the lines waiting.</div>
+      <div class="swatches" id="lyricsPresets"></div>
+      <label class="designPick"><span><b>Active lyric</b><span class="s">The line being sung</span></span><input id="lyricsColor" type="color" value="#c96e50"></label>
+    </div>
+
+    <div class="designGroup">
+      <div class="eyebrow">Disc theme</div>
+      <div class="s">Only the record — vinyl body, grooves and rim.</div>
+      <div class="swatches" id="discPresets"></div>
+      <label class="designPick"><span><b>Disc colour</b><span class="s">Tint of the record</span></span><input id="discColor" type="color" value="#c96e50"></label>
+    </div>
+
+    <button id="designReset" class="btn ghost" style="width:100%;margin-top:22px" type="button">Reset to defaults</button>
   </section>
 </div>
 <div id="overlay" hidden></div>
